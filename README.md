@@ -1,7 +1,8 @@
 # Pixel Invaders
 
-A small 8-bit-style Space Invaders clone, built with [pygame](https://www.pygame.org/) as a
-demo/experiment. Fully self-contained: all pixel-art sprites and chiptune sound effects are
+A small 8-bit-style Space Invaders clone, built with [pygame-ce](https://pyga.me/) (the
+actively-maintained, drop-in-compatible community fork of pygame — still just `import pygame`)
+as a demo/experiment. Fully self-contained: all pixel-art sprites and chiptune sound effects are
 generated from code (no downloaded assets), and the baked output is committed to the repo so
 the game runs standalone.
 
@@ -16,6 +17,12 @@ python -m venv .venv
 ```
 
 (On macOS/Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python main.py`)
+
+> **Why pygame-ce and not pygame?** Plain `pygame` doesn't yet publish a prebuilt wheel for
+> very new Python releases (e.g. 3.14), so `pip install` falls back to a from-source build that
+> typically fails on Windows without a full MSYS2/mingw toolchain. `pygame-ce` ships a
+> prebuilt wheel for current Python versions and is API-compatible, so it's the easier and more
+> reliable choice here — no separate/secondary Python install required.
 
 **Controls**
 
