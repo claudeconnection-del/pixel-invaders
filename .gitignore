@@ -1,4 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
+profile.json
 highscore.txt
+tools/_*.png

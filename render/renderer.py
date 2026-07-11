@@ -21,7 +21,7 @@ from render.post import PostPipeline
 from render.text import OverlayRenderer
 from render.voxel import (
     IDENTITY_QUAT, VoxelMesh, VoxelShader, look_at, perspective,
-    quat_axis_angle, world_from_field,
+    quat_axis_angle, quat_mul, world_from_field,
 )
 
 # per-voxel world scale for each sprite family
@@ -241,7 +241,11 @@ class Renderer:
         vp = self._viewproj()
         self.shader.use(vp)
         self.cube.draw(self._star_instances())
-        q = quat_axis_angle(0, 1, 0.12, self.time * spin_speed)
+        # rock +/-60 deg instead of full revolutions (a 1-voxel-thick model
+        # vanishes edge-on at 90) and lean back for depth
+        tilt = quat_axis_angle(1, 0, 0, -0.45)
+        spin = quat_axis_angle(0, 1, 0, math.sin(self.time * spin_speed) * 0.65)
+        q = quat_mul(tilt, spin)
         x, y, z = world_from_field(fx, fy, 1.5)
         row = np.asarray([(x, y, z, scale, *q, *tint)], dtype=np.float32)
         self.meshes[sprite].draw(row)

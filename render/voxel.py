@@ -94,6 +94,17 @@ def quat_axis_angle(ax, ay, az, angle):
     return (ax / norm * s, ay / norm * s, az / norm * s, math.cos(angle / 2))
 
 
+def quat_mul(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
+
+
 def build_vertices(grid, palette):
     """Extrude filled grid cells into cubes; interior side faces culled.
     Mesh is centered at origin, one voxel = one unit (scale via instances)."""

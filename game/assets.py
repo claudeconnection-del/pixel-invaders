@@ -1,55 +1,86 @@
-"""Central loader for the pre-baked images and sound effects."""
+"""Audio loading and playback. (All visuals are built from game/sprites.py
+grids at runtime; the PNGs under assets/images are docs-only.)"""
 import os
 
 import pygame
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IMAGES_DIR = os.path.join(BASE_DIR, "assets", "images")
 SFX_DIR = os.path.join(BASE_DIR, "assets", "sfx")
+MUSIC_DIR = os.path.join(BASE_DIR, "assets", "music")
 
-IMAGE_FILES = [
-    "player",
-    "enemy_squid_a",
-    "enemy_squid_b",
-    "enemy_crab_a",
-    "enemy_crab_b",
-    "enemy_octo_a",
-    "enemy_octo_b",
-    "bullet_player",
-    "bullet_enemy",
-    "explosion",
-    "barrier",
-]
+# name -> volume
+SFX = {
+    "shoot": 0.16,
+    "explosion_enemy": 0.42,
+    "explosion_player": 0.6,
+    "explosion_big": 0.75,
+    "graze": 0.25,
+    "powerup": 0.5,
+    "shield_break": 0.55,
+    "boss_roar": 0.7,
+    "phase_sting": 0.6,
+    "toast": 0.55,
+    "menu_move": 0.35,
+    "menu_select": 0.45,
+    "game_over": 0.6,
+    "win": 0.6,
+    "step_0": 0.4,
+    "step_1": 0.4,
+    "step_2": 0.4,
+    "step_3": 0.4,
+}
 
-SFX_FILES = [
-    "shoot",
-    "explosion_enemy",
-    "explosion_player",
-    "step_0",
-    "step_1",
-    "step_2",
-    "step_3",
-    "game_over",
-    "win",
-]
+MUSIC = {
+    "menu": os.path.join(MUSIC_DIR, "menu_loop.wav"),
+    "game": os.path.join(MUSIC_DIR, "game_loop.wav"),
+}
 
 
-class Assets:
+class AudioBank:
     def __init__(self):
-        self.images = {}
         self.sfx = {}
-
-    def load(self):
-        for name in IMAGE_FILES:
-            path = os.path.join(IMAGES_DIR, f"{name}.png")
-            self.images[name] = pygame.image.load(path).convert_alpha()
-
-        if pygame.mixer.get_init() is not None:
-            for name in SFX_FILES:
+        self.enabled = pygame.mixer.get_init() is not None
+        self.music_on = True
+        self.current_track = None
+        if self.enabled:
+            pygame.mixer.set_num_channels(24)
+            for name, volume in SFX.items():
                 path = os.path.join(SFX_DIR, f"{name}.wav")
-                self.sfx[name] = pygame.mixer.Sound(path)
+                try:
+                    sound = pygame.mixer.Sound(path)
+                    sound.set_volume(volume)
+                    self.sfx[name] = sound
+                except (pygame.error, FileNotFoundError):
+                    pass
 
     def play(self, name):
         sound = self.sfx.get(name)
         if sound is not None:
             sound.play()
+
+    def set_music_enabled(self, on):
+        self.music_on = on
+        if not self.enabled:
+            return
+        if on and self.current_track:
+            track = self.current_track
+            self.current_track = None
+            self.music(track)
+        elif not on:
+            pygame.mixer.music.stop()
+
+    def music(self, track):
+        """Switch the looping background track ('menu' | 'game' | None)."""
+        if track == self.current_track:
+            return
+        self.current_track = track
+        if not self.enabled or not self.music_on:
+            return
+        pygame.mixer.music.stop()
+        if track is not None:
+            try:
+                pygame.mixer.music.load(MUSIC[track])
+                pygame.mixer.music.set_volume(0.45)
+                pygame.mixer.music.play(-1)
+            except (pygame.error, FileNotFoundError):
+                pass

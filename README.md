@@ -1,12 +1,17 @@
-# Pixel Invaders
+# Pixel Invaders: Voxel Hell
 
-A small 8-bit-style Space Invaders clone, built with [pygame-ce](https://pyga.me/) (the
-actively-maintained, drop-in-compatible community fork of pygame — still just `import pygame`)
-as a demo/experiment. Fully self-contained: all pixel-art sprites and chiptune sound effects are
-generated from code (no downloaded assets), and the baked output is committed to the repo so
-the game runs standalone.
+An 8-bit Space Invaders clone that got completely out of hand: a **3D voxel bullet-hell**
+rendered with raw OpenGL, with GPU particles, bloom + CRT post-processing, a 5-wave campaign
+plus a multi-phase boss, graze scoring, power-ups, achievements, unlockable ships, lifetime
+stat tracking, and fully generated chiptune music. Demo/experiment.
 
-![gameplay](docs/screenshot.png)
+Everything is still self-contained: **all art and audio are generated from code** — the pixel
+grids in [game/sprites.py](game/sprites.py) are extruded into voxel cube meshes at runtime,
+and every sound effect and music loop is synthesized by [tools/gen_sound.py](tools/gen_sound.py)
+with nothing but the Python stdlib.
+
+![boss fight](docs/screenshot.png)
+![wave gameplay](docs/screenshot_wave.png)
 
 ## Play
 
@@ -16,44 +21,75 @@ python -m venv .venv
 .venv\Scripts\python main.py
 ```
 
-(On macOS/Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python main.py`)
+(macOS/Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python main.py`.
+Requires OpenGL 3.3.)
 
-> **Why pygame-ce and not pygame?** Plain `pygame` doesn't yet publish a prebuilt wheel for
-> very new Python releases (e.g. 3.14), so `pip install` falls back to a from-source build that
-> typically fails on Windows without a full MSYS2/mingw toolchain. `pygame-ce` ships a
-> prebuilt wheel for current Python versions and is API-compatible, so it's the easier and more
-> reliable choice here — no separate/secondary Python install required.
+| Key | Action |
+|---|---|
+| Arrows / WASD | Move |
+| Space (hold) | Autofire |
+| **Shift (hold)** | Focus: half speed + show hitbox |
+| Enter | Confirm / start |
+| Esc | Pause / back |
+| C | Toggle CRT filter |
+| M | Toggle music |
 
-**Controls**
+## How it plays
 
-| Key              | Action        |
-|------------------|---------------|
-| Left/Right, A/D  | Move          |
-| Space            | Shoot         |
-| Enter            | Start/restart |
-| Esc              | Quit          |
-
-Clear all the descending aliens to win, or lose all 3 lives (or let the formation reach your
-ship) for game over. High score persists locally to `highscore.txt` (not committed).
+- **Campaign**: 5 authored waves (aimed fans → radial bursts → spirals → bullet walls →
+  everything at once), then the **Dreadnought** — a 3-phase boss with escalating patterns.
+- **Graze** enemy bullets (pass close without being hit) to build a score multiplier up to x5.
+  Your hitbox is the tiny glowing core, not the whole ship — hold Shift to see it.
+- **Power-ups** drop from kills: spread shot, rapid fire, one-hit shield.
+- Getting hit clears the screen (mercy rule) and resets your multiplier. 3 lives.
+- **12 achievements** unlock **6 ship skins** (browse the Hangar). Lifetime stats, best
+  score/wave, unlocks, and settings persist in `profile.json` (atomic writes, survives crashes).
 
 ## How it's built
 
-- `main.py` — game loop and state machine (menu / playing / game over / win)
-- `game/entities.py` — `Player`, `Enemy`, `Bullet`, `Barrier`, `Explosion`
-- `game/assets.py` — loads the baked sprites/sound effects
-- `tools/gen_art.py` — bakes every sprite PNG under `assets/images/` from small pixel-grid
-  definitions, using `pygame.Surface` + `pygame.image.save` (no image library needed)
-- `tools/gen_sound.py` — synthesizes every chiptune sound effect under `assets/sfx/` using only
-  the stdlib (`wave`, `struct`, `math`) — square waves and a small xorshift noise generator for
-  explosions, no audio library needed
-- `tools/smoke_test.py` — headless sanity check (`SDL_VIDEODRIVER=dummy`) that runs a simulated
-  play session to catch import/runtime errors before committing
+The simulation is pure 2D logic with zero pygame/GL dependencies — the 3D is presentation only.
 
-Regenerate assets after tweaking a sprite or sound definition:
+```
+game/    sprites.py (all pixel art as text grids), world.py (bullet-hell sim),
+         patterns.py (composable bullet patterns), waves.py, entities.py,
+         events.py, skins.py
+meta/    profile.py (versioned atomic JSON save), stats.py, achievements.py
+render/  voxel.py (grid -> face-culled cube mesh, GL instancing), particles.py
+         (numpy sim, instanced cubes), post.py (bloom + CRT + shake/aberration),
+         text.py (font-texture HUD), gl.py, renderer.py
+tools/   gen_art.py (bakes PNGs + contact sheet from the grids),
+         gen_sound.py (synthesizes every sfx + two music loops, stdlib-only),
+         test_world.py / test_meta.py / smoke_test.py / test_render.py
+main.py  app state machine: menu, hangar, achievements, stats, gameplay
+```
+
+Rendering: each entity is drawn by instancing its voxel mesh (12 floats per instance:
+position/scale/quaternion/tint); bullets and thousands of particles ride the same path, so the
+whole scene is a handful of draw calls. Scene renders to a float FBO where emissive tints
+exceed 1.0, gets a bright-pass + separable gaussian bloom at half res, then a CRT composite
+(scanlines, vignette, barrel distortion, chromatic aberration pulses on hits).
+
+![sprites](docs/sprites.png)
+
+## Tests
+
+All headless — the sim runs without a window and the renderer runs against a hidden GL context:
+
+```powershell
+.venv\Scripts\python tools\test_world.py    # bot plays the full campaign; determinism; loss path
+.venv\Scripts\python tools\test_meta.py     # achievements/stats/profile round-trip
+.venv\Scripts\python tools\smoke_test.py    # boots the real app, drives every screen
+.venv\Scripts\python tools\test_render.py   # offscreen render, writes screenshots
+```
+
+Regenerate assets after editing sprite grids or sound definitions:
 
 ```powershell
 .venv\Scripts\python tools\gen_art.py
 .venv\Scripts\python tools\gen_sound.py
 ```
+
+> **Why pygame-ce?** Plain `pygame` doesn't publish wheels for very new Python releases;
+> `pygame-ce` is the API-compatible community fork that does (`import pygame` still works).
 
 This is a demo/experiment repo, not a production project.
