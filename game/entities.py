@@ -1,135 +1,175 @@
-"""Entity classes for Pixel Invaders."""
-import pygame
+"""Entity data types for the bullet-hell simulation.
 
-SCREEN_WIDTH = 640
-SCREEN_HEIGHT = 720
+Pure logic: no pygame, no GL. Positions are floats on a 640x720 logical
+playfield (origin top-left, y down). Collision is circle-based.
+"""
+import math
+from dataclasses import dataclass, field
 
-
-class Bullet:
-    def __init__(self, x, y, vy, image, from_player):
-        self.rect = image.get_rect(center=(x, y))
-        self.vy = vy
-        self.image = image
-        self.from_player = from_player
-        self.alive = True
-
-    def update(self, dt):
-        self.rect.y += int(self.vy * dt)
-        if self.rect.bottom < 0 or self.rect.top > SCREEN_HEIGHT:
-            self.alive = False
-
-    def draw(self, surface):
-        surface.blit(self.image, self.rect)
+FIELD_WIDTH = 640
+FIELD_HEIGHT = 720
 
 
+@dataclass
+class InputState:
+    left: bool = False
+    right: bool = False
+    up: bool = False
+    down: bool = False
+    focus: bool = False
+    fire: bool = False
+
+
+@dataclass
 class Player:
-    def __init__(self, image, x, y):
-        self.image = image
-        self.rect = image.get_rect(midbottom=(x, y))
-        self.speed = 260
-        self.lives = 3
-        self.cooldown = 0.0
-        self.fire_delay = 0.45
-        self.alive = True
-
-    def update(self, dt, keys):
-        dx = 0
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            dx -= 1
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            dx += 1
-        self.rect.x += int(dx * self.speed * dt)
-        self.rect.left = max(0, self.rect.left)
-        self.rect.right = min(SCREEN_WIDTH, self.rect.right)
-        if self.cooldown > 0:
-            self.cooldown -= dt
-
-    def can_shoot(self):
-        return self.cooldown <= 0
-
-    def shoot(self):
-        self.cooldown = self.fire_delay
-
-    def draw(self, surface):
-        surface.blit(self.image, self.rect)
-
-
-class Enemy:
-    def __init__(self, kind, frames, x, y, points):
-        self.kind = kind
-        self.frames = frames  # (frame_a, frame_b)
-        self.frame_index = 0
-        self.rect = frames[0].get_rect(topleft=(x, y))
-        self.points = points
-        self.alive = True
+    x: float = FIELD_WIDTH / 2
+    y: float = FIELD_HEIGHT - 70
+    speed: float = 300.0
+    focus_speed: float = 150.0
+    hitbox_r: float = 4.0
+    graze_r: float = 18.0
+    lives: int = 3
+    fire_cooldown: float = 0.0
+    base_fire_delay: float = 0.14
+    invuln: float = 0.0
+    shield: bool = False
+    spread_timer: float = 0.0
+    rapid_timer: float = 0.0
+    alive: bool = True
 
     @property
-    def image(self):
-        return self.frames[self.frame_index]
+    def fire_delay(self):
+        return self.base_fire_delay * (0.5 if self.rapid_timer > 0 else 1.0)
 
-    def toggle_frame(self):
-        self.frame_index = 1 - self.frame_index
-
-    def draw(self, surface):
-        surface.blit(self.image, self.rect)
-
-
-class Barrier:
-    """A destructible barrier made of a small grid of blocks, each block is
-    a chunk of the barrier sprite; blocks are removed as they take hits."""
-
-    BLOCK_SIZE = 16
-    COLS = 4
-    ROWS = 4
-
-    def __init__(self, block_image, x, y):
-        self.block_image = block_image
-        self.x = x
-        self.y = y
-        self.blocks = [
-            [True for _ in range(self.COLS)] for _ in range(self.ROWS)
-        ]
-
-    def rects(self):
-        for r in range(self.ROWS):
-            for c in range(self.COLS):
-                if self.blocks[r][c]:
-                    yield (
-                        r,
-                        c,
-                        pygame.Rect(
-                            self.x + c * self.BLOCK_SIZE,
-                            self.y + r * self.BLOCK_SIZE,
-                            self.BLOCK_SIZE,
-                            self.BLOCK_SIZE,
-                        ),
-                    )
-
-    def hit(self, r, c):
-        self.blocks[r][c] = False
-
-    def is_empty(self):
-        return not any(any(row) for row in self.blocks)
-
-    def draw(self, surface):
-        sub_w = self.block_image.get_width() // self.COLS
-        sub_h = self.block_image.get_height() // self.ROWS
-        for r, c, rect in self.rects():
-            src = pygame.Rect(c * sub_w, r * sub_h, sub_w, sub_h)
-            surface.blit(self.block_image, rect, src)
+    def update(self, dt, inp):
+        speed = self.focus_speed if inp.focus else self.speed
+        dx = (1 if inp.right else 0) - (1 if inp.left else 0)
+        dy = (1 if inp.down else 0) - (1 if inp.up else 0)
+        if dx and dy:
+            norm = 1 / math.sqrt(2)
+            dx *= norm
+            dy *= norm
+        self.x = max(20, min(FIELD_WIDTH - 20, self.x + dx * speed * dt))
+        self.y = max(FIELD_HEIGHT * 0.45, min(FIELD_HEIGHT - 30, self.y + dy * speed * dt))
+        if self.fire_cooldown > 0:
+            self.fire_cooldown -= dt
+        if self.invuln > 0:
+            self.invuln -= dt
+        if self.spread_timer > 0:
+            self.spread_timer -= dt
+        if self.rapid_timer > 0:
+            self.rapid_timer -= dt
 
 
-class Explosion:
-    def __init__(self, image, center, duration=0.25):
-        self.image = image
-        self.rect = image.get_rect(center=center)
-        self.timer = duration
-        self.alive = True
+@dataclass
+class Bullet:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    r: float = 5.0
+    sprite: str = "bullet_enemy"
+    from_player: bool = False
+    grazed: bool = False
+    curve: float = 0.0  # radians/sec applied to velocity direction
+    alive: bool = True
 
     def update(self, dt):
-        self.timer -= dt
-        if self.timer <= 0:
+        if self.curve:
+            angle = math.atan2(self.vy, self.vx) + self.curve * dt
+            speed = math.hypot(self.vx, self.vy)
+            self.vx = math.cos(angle) * speed
+            self.vy = math.sin(angle) * speed
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+        if not (-40 <= self.x <= FIELD_WIDTH + 40 and -40 <= self.y <= FIELD_HEIGHT + 40):
             self.alive = False
 
-    def draw(self, surface):
-        surface.blit(self.image, self.rect)
+
+@dataclass
+class Enemy:
+    kind: str            # squid | crab | octo | elite
+    slot_x: float        # formation home position
+    slot_y: float
+    hp: int
+    points: int
+    radius: float = 22.0
+    entry_delay: float = 0.0
+    entry_t: float = 0.0  # 0..1 fly-in progress
+    spawn_x: float = 0.0
+    spawn_y: float = -60.0
+    bob_phase: float = 0.0
+    patterns: list = field(default_factory=list)
+    x: float = 0.0
+    y: float = -60.0
+    time_alive: float = 0.0
+    alive: bool = True
+
+    ENTRY_DURATION = 1.2
+
+    def update(self, dt, formation_offset_x):
+        self.time_alive += dt
+        if self.time_alive < self.entry_delay:
+            self.x, self.y = self.spawn_x, self.spawn_y
+            return False  # not yet active (can't fire)
+        if self.entry_t < 1.0:
+            self.entry_t = min(1.0, self.entry_t + dt / self.ENTRY_DURATION)
+            # ease-out fly-in from spawn point to formation slot
+            k = 1 - (1 - self.entry_t) ** 3
+            self.x = self.spawn_x + (self.slot_x - self.spawn_x) * k
+            self.y = self.spawn_y + (self.slot_y - self.spawn_y) * k
+            return False
+        t = self.time_alive
+        self.x = self.slot_x + formation_offset_x + math.sin(t * 1.7 + self.bob_phase) * 6
+        self.y = self.slot_y + math.sin(t * 2.3 + self.bob_phase * 2) * 4
+        return True  # in formation, may fire
+
+
+@dataclass
+class Boss:
+    hp: int
+    max_hp: int
+    x: float = FIELD_WIDTH / 2
+    y: float = 150.0
+    radius: float = 58.0
+    time_alive: float = 0.0
+    phase: int = 1  # 1..3
+    alive: bool = True
+
+    def update(self, dt):
+        self.time_alive += dt
+        t = self.time_alive
+        self.x = FIELD_WIDTH / 2 + math.sin(t * 0.55) * 170
+        self.y = 150 + math.sin(t * 1.1) * 24
+
+    @property
+    def hp_frac(self):
+        return max(0.0, self.hp / self.max_hp)
+
+
+@dataclass
+class PowerUp:
+    kind: str  # spread | rapid | shield
+    x: float
+    y: float
+    vy: float = 95.0
+    radius: float = 24.0
+    time_alive: float = 0.0
+    alive: bool = True
+
+    def update(self, dt):
+        self.time_alive += dt
+        self.y += self.vy * dt
+        self.x += math.sin(self.time_alive * 2.2) * 20 * dt
+        if self.y > FIELD_HEIGHT + 40:
+            self.alive = False
+
+
+def dist_sq(ax, ay, bx, by):
+    dx, dy = ax - bx, ay - by
+    return dx * dx + dy * dy
+
+
+def circles_hit(ax, ay, ar, bx, by, br):
+    r = ar + br
+    return dist_sq(ax, ay, bx, by) <= r * r
