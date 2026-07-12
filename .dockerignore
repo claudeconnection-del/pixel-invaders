@@ -1,0 +1,15 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+assets/
+docs/
+tools/
+games/
+render/
+game/
+meta/
+arcade/
+main.py
+profile.json
+*.db

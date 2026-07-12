@@ -15,6 +15,7 @@ import pygame
 from game import events as ev
 from game.assets import AudioBank
 from game.entities import InputState
+from game.netclient import ArcadeClient
 from games import load_games, GAME_IDS
 from meta import leaderboard as lb
 from meta import profile as profile_mod
@@ -139,6 +140,11 @@ class App:
         self.attract_index = -1
         self.attract_run = None
         self.attract_gid = None
+
+        # global leaderboard (offline-safe)
+        self.net = ArcadeClient(self.profile["settings"].get("server_url", ""))
+        self.board_scope = "local"        # local | global
+        self.global_boards = {}           # (game, mode) -> list | "pending" | None
         self.initials = list(self.profile["settings"].get("player_name", "AAA"))
         self.initials_slot = 0
         self.pending_board = None    # (game_id, mode, score, extra) awaiting initials
@@ -253,6 +259,12 @@ class App:
                     and len(modes) > 1:
                 self.board_mode_index = (self.board_mode_index + 1) % len(modes)
                 audio.play("menu_move")
+            elif key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s) \
+                    and self.net.available:
+                self.board_scope = "global" if self.board_scope == "local" else "local"
+                audio.play("menu_move")
+                if self.board_scope == "global":
+                    self._request_global_board()
             elif key in (pygame.K_ESCAPE, pygame.K_RETURN):
                 self.last_rank = None
                 self.state = MENU
@@ -420,12 +432,34 @@ class App:
         name = "".join(self.initials).strip() or "AAA"
         self.profile["settings"]["player_name"] = "".join(self.initials)
         self.last_rank = lb.submit(self.profile, game_id, mode, name, score, extra)
+        self.net.submit_score(game_id, mode, name, score, extra.get("wave"))
         self.pending_board = None
+        self.board_scope = "local"
         self.board_mode_index = next(
             (i for i, (m, _) in enumerate(self.game.INFO.modes) if m == mode), 0)
         self.save_profile()
         self.audio.play("toast")
         self.state = LEADERBOARD
+
+    def _request_global_board(self):
+        modes = self.game.INFO.modes
+        mode_id = modes[self.board_mode_index % len(modes)][0]
+        key = (self.game_id, mode_id)
+        if self.global_boards.get(key) in (None, "error") or key not in self.global_boards:
+            self.global_boards[key] = "pending"
+            self.net.fetch_scores(self.game_id, mode_id)
+
+    def poll_network(self):
+        for tag, payload in self.net.poll():
+            if isinstance(tag, tuple) and tag[0] == "scores":
+                key = (tag[1], tag[2])
+                if payload is None:
+                    self.global_boards[key] = "error"
+                else:
+                    self.global_boards[key] = payload.get("scores", [])
+            elif tag == "submit" and payload is not None:
+                self.post_banner(f"GLOBAL RANK #{payload['rank']}", 3.0)
+                self.audio.play("toast")
 
     # -------------------------------------------------------------- attract
     def start_attract(self):
@@ -804,25 +838,47 @@ class App:
         o.text(f"{self.game.INFO.name} — HIGH SCORES", WIDTH / 2, 70, size=32,
                color=GREEN, center=True)
         tab = f"< {mode_label} >" if len(modes) > 1 else mode_label
-        o.text(tab, WIDTH / 2, 125, size=20, color=GOLD, center=True)
+        o.text(tab, WIDTH / 2, 122, size=20, color=GOLD, center=True)
 
-        board = lb.entries(self.profile, self.game_id, mode_id)
-        if not board:
+        if self.net.available:
+            scope_label = "LOCAL" if self.board_scope == "local" else "GLOBAL"
+            o.text(f"[{scope_label}]  Up/Down: switch", WIDTH / 2, 152,
+                   size=14, color=CYAN, center=True)
+
+        highlight_rank = self.last_rank if self.board_scope == "local" else None
+        if self.board_scope == "local":
+            board = [dict(e, rank=i + 1) for i, e in
+                     enumerate(lb.entries(self.profile, self.game_id, mode_id))]
+        else:
+            data = self.global_boards.get((self.game_id, mode_id))
+            if data == "pending":
+                o.text("FETCHING...", WIDTH / 2, HEIGHT / 2, size=22,
+                       color=DIM, center=True)
+                board = []
+            elif data == "error" or data is None:
+                o.text("OFFLINE — couldn't reach the arcade server",
+                       WIDTH / 2, HEIGHT / 2, size=18, color=RED, center=True)
+                board = []
+            else:
+                board = data
+
+        if self.board_scope == "local" and not board:
             o.text("NO SCORES YET — GO SET ONE", WIDTH / 2, HEIGHT / 2,
                    size=22, color=DIM, center=True)
-        for i, entry in enumerate(board):
-            y = 190 + i * 52
-            rank = i + 1
-            highlight = self.last_rank == rank
+        for entry in board:
+            rank = entry["rank"]
+            y = 190 + (rank - 1) * 48
+            highlight = highlight_rank == rank
             color = GOLD if highlight else (WHITE if rank <= 3 else DIM)
             if highlight:
-                o.rect(WIDTH / 2 - 330, y - 6, 660, 42, (45, 40, 20, 180))
+                o.rect(WIDTH / 2 - 330, y - 6, 660, 40, (45, 40, 20, 180))
             o.text(f"{rank:2d}", WIDTH / 2 - 300, y, size=24, color=color)
             o.text(entry["name"], WIDTH / 2 - 220, y, size=24, color=color)
             o.text(f"{entry['score']:,}", WIDTH / 2 + 40, y, size=24, color=color)
             o.text(entry.get("date", ""), WIDTH / 2 + 220, y, size=16, color=DIM)
         o.text("Esc: back", WIDTH / 2, HEIGHT - 30, size=14, color=DIM,
                center=True)
+        self.draw_banner_and_toasts()
 
     def draw_attract_overlay(self):
         o = self.renderer.overlay
@@ -935,6 +991,7 @@ class App:
                     self.joysticks.pop(event.instance_id, None)
 
             self.poll_pad_navigation(dt)
+            self.poll_network()
             self.update_timers(dt)
             if self.state == PLAYING:
                 self.update_playing(dt)

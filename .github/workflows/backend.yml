@@ -1,0 +1,44 @@
+name: backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - ".github/workflows/backend.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install server deps
+        run: pip install -r server/requirements.txt httpx
+      - name: Run API tests
+        run: python server/test_server.py
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/pixel-invaders-arcade:latest
+            ghcr.io/${{ github.repository_owner }}/pixel-invaders-arcade:${{ github.sha }}

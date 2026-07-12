@@ -1,0 +1,27 @@
+# Arcade backend for the Ubuntu box.
+#
+# With GHCR (after `docker login ghcr.io` with a PAT that has read:packages):
+#   docker compose pull && docker compose up -d
+# Or build locally instead:
+#   docker compose up -d --build
+services:
+  arcade-api:
+    image: ghcr.io/claudeconnection-del/pixel-invaders-arcade:latest
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - arcade-data:/data
+    environment:
+      # lock down browser reads to your site(s) if you like:
+      # ARCADE_CORS_ORIGINS: "https://chomey.org,https://www.chomey.org"
+      ARCADE_CORS_ORIGINS: "*"
+      # require a key for score submissions (set the same key in the game
+      # via the PIXEL_INVADERS_API_KEY env var):
+      # ARCADE_API_KEY: "pick-something"
+    restart: unless-stopped
+
+volumes:
+  arcade-data:
