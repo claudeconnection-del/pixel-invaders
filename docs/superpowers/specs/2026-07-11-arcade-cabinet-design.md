@@ -60,3 +60,4 @@ Approved design (user Q&A), 2026-07-11. Builds on the Voxel Hell overhaul.
 - `server/test_server.py`: API tests via FastAPI TestClient (dev-only dependency).
 - Manual: 120fps + fullscreen verified on the desktop; container verified with a local
   build + healthcheck + score round-trip before pushing CI.
+- Tested successfully: round-trip CI/CD for High Scores API/Multiplayer server container/deployment
