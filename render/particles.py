@@ -72,13 +72,13 @@ class ParticleSystem:
             self.gravity[i] = gravity
         self.quat[idx] = self._rand_quats(count)
 
-    def spark(self, fx, fy, color=(255, 240, 150), count=6):
-        """Small bright graze spark."""
+    def spark(self, fx, fy, color=(255, 226, 150), count=6):
+        """Small bright graze spark (candle-gold by default)."""
         self.burst(fx, fy, [color], count=count, speed=(1.5, 4.0),
                    life=(0.15, 0.35), scale=(0.03, 0.07), emissive=2.4, gravity=0.2)
 
-    def exhaust(self, fx, fy, color=(120, 180, 255)):
-        """Engine trail puff below the ship."""
+    def exhaust(self, fx, fy, color=(255, 158, 70)):
+        """Engine trail puff below the ship (ember by default)."""
         if self.rng.random() > self.density:
             return
         idx = self._alloc(2)
@@ -93,8 +93,8 @@ class ParticleSystem:
             self.gravity[i] = 0.0
         self.quat[idx] = self._rand_quats(len(idx))
 
-    def glitter(self, fx, fy, color=(180, 255, 190)):
-        """Sparkle trail for falling power-ups."""
+    def glitter(self, fx, fy, color=(255, 214, 120)):
+        """Sparkle trail for falling power-ups (candle-gold by default)."""
         if self.rng.random() > self.density:
             return
         idx = self._alloc(1)

@@ -3,6 +3,8 @@ import math
 
 from arcade.game_api import GameInfo, GameRun
 from game import events as ev
+from game import theme
+from game.theme import TEXT, DIM, GOLD, EMBER, DANGER, PANEL, BAR_BG
 from game.sprites import GUN_VIEW, surface_from_grid
 from render.renderer import Batcher
 from render.voxel import quat_axis_angle
@@ -18,16 +20,14 @@ INFO = GameInfo(
 )
 INFO.mouse_look = True  # mouse turns; A/D strafe; crosshair centered
 
-GREEN = (140, 255, 170, 255)
-DIM = (150, 150, 165, 255)
-WHITE = (235, 235, 240, 255)
-GOLD = (250, 220, 90, 255)
-RED = (255, 110, 100, 255)
-CYAN = (140, 235, 255, 255)
+# Voxel Doom's signature: hell-red Garnet (accent) + Rust (accent2).
+_T = theme.for_game("voxeldoom")
+ACCENT, ACCENT2 = _T.accent, _T.accent2
 
-WALL_TINTS = [(0.42, 0.36, 0.32, 1.0), (0.36, 0.31, 0.28, 1.0)]
-FLOOR_TINT = (0.16, 0.15, 0.18, 1.0)
-CEIL_TINT = (0.10, 0.09, 0.12, 1.0)
+# warmed dungeon: sooty warm stone, no cool blue in the shadows
+WALL_TINTS = [(0.44, 0.35, 0.30, 1.0), (0.37, 0.29, 0.25, 1.0)]
+FLOOR_TINT = (0.17, 0.14, 0.13, 1.0)
+CEIL_TINT = (0.11, 0.08, 0.08, 1.0)
 
 ENEMY_SPRITES = {"imp": ("imp_a", "imp_b"), "gunner": ("gunner_a", "gunner_b")}
 EXPLOSION_COLORS = {
@@ -159,35 +159,36 @@ class DoomRun(GameRun):
             ex, ez = w.exit_cell[0] * CELL, w.exit_cell[1] * CELL
             pulse = 1.4 + 0.6 * abs(math.sin(t * 3))
             for level in range(4):
+                # a warm doorway of light — the way out, the light left on
                 b.add_world("cube", ex, 0.3 + level * 0.55, ez, 0.22,
                             quat=quat_axis_angle(0, 1, 0, t * 2 + level),
-                            tint=(0.4 * pulse, pulse, 0.5 * pulse, 1.0))
+                            tint=(pulse, pulse * 0.72, 0.38 * pulse, 1.0))
 
         renderer.draw_scene(b, walls=False, stars=False)
 
     def draw_hud(self, o, width, height, section):
         w = self.world
         # health + ammo plates
-        o.rect(24, height - 74, 250, 52, (20, 22, 34, 220))
-        hp_color = GREEN if w.hp > 50 else (GOLD if w.hp > 25 else RED)
+        o.rect(24, height - 74, 250, 52, PANEL)
+        hp_color = EMBER if w.hp > 50 else (GOLD if w.hp > 25 else DANGER)
         o.text(f"HP {max(0, w.hp):3d}", 40, height - 62, size=26, color=hp_color)
-        o.rect(150, height - 56, 110, 14, (45, 45, 65, 255))
+        o.rect(150, height - 56, 110, 14, BAR_BG)
         o.rect(150, height - 56, 110 * max(0, w.hp) / 100, 14, hp_color)
 
-        o.rect(width - 220, height - 74, 196, 52, (20, 22, 34, 220))
+        o.rect(width - 220, height - 74, 196, 52, PANEL)
         o.text(f"AMMO {w.ammo:3d}", width - 200, height - 62, size=26,
-               color=GOLD if w.ammo > 8 else RED)
+               color=GOLD if w.ammo > 8 else DANGER)
 
-        o.text(f"SCORE {w.score:06d}", 26, 16, size=20, color=GREEN)
+        o.text(f"SCORE {w.score:06d}", 26, 16, size=20, color=EMBER)
         o.text(f"FLOOR {w.level_index + 1}/{len(MAPS)}", 26, 44, size=14,
                color=DIM)
-        o.text(f"KILLS {w.stats['kills']}", 26, 66, size=14, color=CYAN)
+        o.text(f"KILLS {w.stats['kills']}", 26, 66, size=14, color=ACCENT2)
 
         # crosshair
-        o.rect(width / 2 - 1, height / 2 - 6, 2, 4, WHITE)
-        o.rect(width / 2 - 1, height / 2 + 2, 2, 4, WHITE)
-        o.rect(width / 2 - 6, height / 2 - 1, 4, 2, WHITE)
-        o.rect(width / 2 + 2, height / 2 - 1, 4, 2, WHITE)
+        o.rect(width / 2 - 1, height / 2 - 6, 2, 4, TEXT)
+        o.rect(width / 2 - 1, height / 2 + 2, 2, 4, TEXT)
+        o.rect(width / 2 - 6, height / 2 - 1, 4, 2, TEXT)
+        o.rect(width / 2 + 2, height / 2 - 1, 4, 2, TEXT)
 
         # gun viewmodel with bob + kick, muzzle flash overlay
         bob = math.sin(self.time * 7) * 6

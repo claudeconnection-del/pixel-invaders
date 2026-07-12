@@ -3,6 +3,8 @@ import math
 
 from arcade.game_api import GameInfo, GameRun
 from game import events as ev
+from game import theme
+from game.theme import TEXT, DIM, GOLD, EMBER, BAR_BG
 from render.renderer import Batcher
 from render.voxel import quat_axis_angle
 
@@ -17,12 +19,9 @@ INFO = GameInfo(
     modes=[("arcade", "ARCADE")],
 )
 
-GREEN = (140, 255, 170, 255)
-DIM = (150, 150, 165, 255)
-WHITE = (235, 235, 240, 255)
-GOLD = (250, 220, 90, 255)
-RED = (255, 110, 100, 255)
-CYAN = (140, 235, 255, 255)
+# Voxel Breaker's signature: cool Lagoon (accent) + Frost (accent2).
+_T = theme.for_game("breaker")
+ACCENT, ACCENT2 = _T.accent, _T.accent2
 
 POWERUP_SPRITES = {"multi": "powerup_spread", "wide": "powerup_shield",
                    "laser": "powerup_rapid"}
@@ -123,34 +122,35 @@ class BreakerRun(GameRun):
             b.add(POWERUP_SPRITES[pu.kind], pu.x, pu.y, 0.2, quat=spin,
                   tint=(1.5, 1.5, 1.5, 1.0))
 
+        renderer.stud_color = _T.scene_studs()  # lagoon arena edge
         renderer.draw_scene(b)
 
     def per_frame_particles(self, renderer, rng):
         for ball in self.world.balls:
             if rng.random() < 0.5:
                 renderer.particles.glitter(ball.x, ball.y,
-                                           color=(200, 220, 255))
+                                           color=ACCENT2[:3])  # frost ball trail
 
     def draw_hud(self, o, width, height, section):
         w = self.world
         life = section["lifetime"]
-        o.text(f"SCORE {w.score:07d}", 26, 16, size=22, color=GREEN)
+        o.text(f"SCORE {w.score:07d}", 26, 16, size=22, color=EMBER)
         o.text(f"BEST  {max(life['best_score'], w.score):07d}", 26, 46,
                size=16, color=DIM)
         frac = (w.multiplier - 1.0) / 4.0
         o.text(f"x{w.multiplier:.1f}", 26, 76, size=18, color=GOLD)
-        o.rect(80, 80, 130, 10, (45, 45, 65, 220))
+        o.rect(80, 80, 130, 10, BAR_BG)
         o.rect(80, 80, 130 * frac, 10, GOLD)
-        o.text(f"LEVEL {w.level_index + 1}", 26, 100, size=14, color=CYAN)
+        o.text(f"LEVEL {w.level_index + 1}", 26, 100, size=14, color=ACCENT)
 
         o.text("BALLS", width - 210, 16, size=16, color=DIM)
         for i in range(max(0, w.lives)):
-            o.rect(width - 130 + i * 26, 16, 18, 18, CYAN)
+            o.rect(width - 130 + i * 26, 16, 18, 18, ACCENT)
 
         y = 46
         if w.wide_timer > 0:
             o.text(f"[WIDE {w.wide_timer:.0f}]", width - 210, y, size=14,
-                   color=CYAN)
+                   color=ACCENT)
             y += 20
         if w.laser_timer > 0:
             o.text(f"[LASER {w.laser_timer:.0f}]", width - 210, y, size=14,
@@ -158,7 +158,7 @@ class BreakerRun(GameRun):
 
         if w.state in (SERVING, INTERMISSION):
             o.text("GET READY", width / 2, height * 0.55, size=22,
-                   color=WHITE, center=True)
+                   color=TEXT, center=True)
 
 
 def create_run(mode, rng):

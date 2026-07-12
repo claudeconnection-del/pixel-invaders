@@ -59,11 +59,18 @@ out vec4 frag;
 
 uniform vec3 u_lightdir;
 
+// firelight: a warm key from the light direction, a cool ambient fill in
+// shadow, and a warm rim. Tints the whole cabinet toward ember while
+// preserving each voxel's own hue (multiplicative, near-unity average).
+const vec3 KEY = vec3(1.09, 0.96, 0.78);
+const vec3 FILL = vec3(0.82, 0.86, 1.05);
+
 void main() {
     vec3 n = normalize(v_normal);
     float diff = max(dot(n, u_lightdir), 0.0);
-    float rim = pow(1.0 - abs(n.z), 2.0) * 0.25;
-    vec3 lit = v_color * (0.45 + 0.6 * diff) + v_color * rim;
+    float rim = pow(1.0 - abs(n.z), 2.0) * 0.28;
+    vec3 shade = mix(FILL, KEY, diff);
+    vec3 lit = v_color * (0.44 + 0.62 * diff) * shade + v_color * rim * KEY;
     frag = vec4(lit, v_alpha);
 }
 """

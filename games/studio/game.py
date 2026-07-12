@@ -11,6 +11,8 @@ import tempfile
 import pygame
 
 from arcade.game_api import GameInfo, GameRun
+from game import theme
+from game.theme import TEXT, DIM, GOLD, EMBER, PANEL, PANEL_DIM, HAIR
 from game.composer import (
     BASS_NAMES, DRUM_NAMES, LEAD_NAMES, PROGRESSION_NAMES,
     SectionSpec, build_section, rms_profile, write_wav,
@@ -32,12 +34,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 USERMUSIC_DIR = os.path.join(BASE_DIR, "usermusic")
 MAX_SLOTS = 8
 
-GREEN = (140, 255, 170, 255)
-DIM = (150, 150, 165, 255)
-WHITE = (235, 235, 240, 255)
-GOLD = (250, 220, 90, 255)
-RED = (255, 110, 100, 255)
-CYAN = (140, 235, 255, 255)
+# Voxel Studio's signature: creative Bloom (accent) + Petal (accent2).
+_T = theme.for_game("studio")
+ACCENT, ACCENT2 = _T.accent, _T.accent2
 
 DENSITY_LABELS = {0.32: "SPARSE", 0.2: "MID", 0.08: "BUSY"}
 
@@ -345,7 +344,8 @@ class StudioRun(GameRun):
             for row in range(stack + 1):
                 fy = 640 - row * 26
                 heat = row / 9
-                tint = (0.3 + heat * 1.6, 1.4 - heat * 0.7, 0.9 - heat * 0.5,
+                # bloom pink at the base rising into hot ember at the peak
+                tint = (0.9 + heat * 1.2, 0.42 + heat * 0.62, 0.72 - heat * 0.34,
                         1.0)
                 b.add("cube", fx, fy, 0.34, tint=tint)
         # beat-pulsing centerpiece while playing
@@ -359,13 +359,13 @@ class StudioRun(GameRun):
         renderer.draw_scene(b, walls=False)
 
     def draw_hud(self, o, width, height, section):
-        o.text("VOXEL STUDIO", width / 2, 26, size=30, color=GREEN, center=True)
+        o.text("VOXEL STUDIO", width / 2, 26, size=30, color=ACCENT, center=True)
 
         panel_x = width - 480
         for i, (label, key, choices) in enumerate(PARAM_ROWS):
             y = 90 + i * 44
             selected = i == self.row
-            color = WHITE if selected else DIM
+            color = TEXT if selected else DIM
             prefix = "> " if selected else "  "
             o.text(prefix + label, panel_x, y, size=19, color=color)
             value = value_label(key, getattr(self.spec, key))
@@ -373,20 +373,19 @@ class StudioRun(GameRun):
                    panel_x + 250, y, size=19, color=GOLD if selected else DIM)
 
         # sequence strip
-        o.text("SEQUENCE", 60, height - 190, size=16, color=CYAN)
+        o.text("SEQUENCE", 60, height - 190, size=16, color=ACCENT)
         for i in range(MAX_SLOTS):
             x = 60 + i * 64
             filled = i < len(self.sequence)
-            o.rect(x, height - 165, 54, 40, (30, 38, 55, 230) if filled
-                   else (18, 20, 32, 200))
-            o.rect(x, height - 165, 54, 3, GOLD if filled else (60, 60, 75, 255))
+            o.rect(x, height - 165, 54, 40, PANEL if filled else PANEL_DIM)
+            o.rect(x, height - 165, 54, 3, GOLD if filled else HAIR)
             if filled:
                 o.text(f"{self.sequence[i].tempo}", x + 27, height - 156,
-                       size=13, color=WHITE, center=True)
+                       size=13, color=TEXT, center=True)
                 o.text(self.sequence[i].bass_style[:4].upper(), x + 27,
-                       height - 140, size=10, color=DIM, center=True)
+                       height - 140, size=10, color=ACCENT2, center=True)
 
-        o.text(self.status, width / 2, height - 96, size=15, color=GREEN,
+        o.text(self.status, width / 2, height - 96, size=15, color=EMBER,
                center=True)
         o.text("Space: preview  R: reroll seed  Enter: add  X: remove  "
                "P: play sequence  E: export as game music",

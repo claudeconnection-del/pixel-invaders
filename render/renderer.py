@@ -13,6 +13,7 @@ from OpenGL.GL import (
     glBlendFunc, glDisable, glEnable,
 )
 
+from game import theme
 from game.sprites import ALL_SPRITES, PALETTE
 from render.particles import ParticleSystem
 from render.post import PostPipeline
@@ -87,21 +88,29 @@ class Renderer:
         self.star_pos[:, 1] = np.random.uniform(-14, 14, n)
         self.star_pos[:, 2] = np.random.uniform(-30, -6, n)
         self.star_speed = np.random.uniform(0.4, 1.8, n).astype(np.float32)
-        shade = np.random.uniform(0.25, 0.8, n).astype(np.float32)
+        # warm firelight starfield: mostly ember/honey embers of distance,
+        # a minority cool for depth contrast
+        shade = np.random.uniform(0.22, 0.8, n).astype(np.float32)
+        warm = np.asarray(theme.STAR_WARM, dtype=np.float32)
+        cool = np.asarray(theme.STAR_COOL, dtype=np.float32)
+        is_cool = (np.random.random(n) < 0.16)[:, None]
+        base = np.where(is_cool, cool, warm)
         self.star_color = np.empty((n, 4), dtype=np.float32)
-        self.star_color[:, 0] = shade * 0.8
-        self.star_color[:, 1] = shade * 0.85
-        self.star_color[:, 2] = shade
+        self.star_color[:, 0:3] = base * shade[:, None]
         self.star_color[:, 3] = 1.0
         self.star_scale = np.random.uniform(0.02, 0.06, n).astype(np.float32)
 
-        # arena boundary: dim emissive studs marking the field edges
+        # arena boundary: dim emissive studs marking the field edges. Position
+        # is fixed; colour is per-game (set via stud_color) so each field game
+        # lines its arena in its own signature light.
         studs = []
         for fy in range(0, 721, 36):
             for fx in (-6, 646):
                 x, y, z = world_from_field(fx, fy)
-                studs.append((x, y, z, 0.055, 0, 0, 0, 1, 0.25, 0.75, 0.85, 0.5))
-        self.wall_instances = np.asarray(studs, dtype=np.float32)
+                studs.append((x, y, z, 0.055, 0, 0, 0, 1))
+        self._wall_xyzsq = np.asarray(studs, dtype=np.float32)
+        self.default_stud = theme.DEFAULT.scene_studs()
+        self.stud_color = self.default_stud
 
     def _apply_size(self, width, height):
         """Size-dependent state; called at init and on window resize."""
@@ -150,6 +159,7 @@ class Renderer:
         self.shake = max(0.0, self.shake - dt * 1.8)
         self.aberration = max(0.0, self.aberration - dt * 2.2)
         self.camera_override = None  # games re-set it every draw
+        self.stud_color = self.default_stud  # games re-tint their arena studs
         self.particles.update(dt)
 
         # starfield drift (wrap at bottom)
@@ -205,6 +215,14 @@ class Renderer:
         out[:, 8:12] = self.star_color
         return out
 
+    def _wall_instances(self):
+        """Edge studs with the current per-game stud colour applied."""
+        n = len(self._wall_xyzsq)
+        out = np.empty((n, 12), dtype=np.float32)
+        out[:, 0:8] = self._wall_xyzsq
+        out[:, 8:12] = self.stud_color
+        return out
+
     # ------------------------------------------------------- scene drawing
     def draw_scene(self, batcher, walls=True, stars=True):
         """Draw backdrop + a game's Batcher + particles in one pass."""
@@ -214,7 +232,7 @@ class Renderer:
         if stars:
             self.cube.draw(self._star_instances())
         if walls:
-            self.cube.draw(self.wall_instances)
+            self.cube.draw(self._wall_instances())
 
         for sprite, rows in batcher.batches.items():
             self.meshes[sprite].draw(np.asarray(rows, dtype=np.float32))

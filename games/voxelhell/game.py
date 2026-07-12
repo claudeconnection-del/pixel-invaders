@@ -4,6 +4,8 @@ import math
 
 from arcade.game_api import GameInfo, GameRun
 from game import events as ev
+from game import theme
+from game.theme import TEXT, DIM, GOLD, EMBER, DANGER, BAR_BG
 from render.renderer import Batcher
 from render.voxel import quat_axis_angle
 
@@ -51,12 +53,10 @@ POWERUP_SPRITES = {
     "shield": "powerup_shield",
 }
 
-GREEN = (140, 255, 170, 255)
-DIM = (150, 150, 165, 255)
-WHITE = (235, 235, 240, 255)
-GOLD = (250, 220, 90, 255)
-RED = (255, 110, 100, 255)
-CYAN = (140, 235, 255, 255)
+# Voxel Hell's signature: cosmos Iris (accent) + Bloom (accent2). Score/best
+# stay the house Ember; DIM/GOLD/TEXT/DANGER are the shared semantic tokens.
+_T = theme.for_game("voxelhell")
+ACCENT, ACCENT2 = _T.accent, _T.accent2
 
 
 class VoxelHellRun(GameRun):
@@ -215,38 +215,39 @@ class VoxelHellRun(GameRun):
                                 quat=quat_axis_angle(0, 0, 1, t * 3),
                                 tint=(2.6, 2.4, 2.6, 1.0), z=0.6)
 
+        renderer.stud_color = _T.scene_studs()  # iris arena edge
         renderer.draw_scene(b)
 
     def draw_hud(self, o, width, height, section):
         world = self.world
         life = section["lifetime"]
-        o.text(f"SCORE {world.score:07d}", 26, 16, size=22, color=GREEN)
+        o.text(f"SCORE {world.score:07d}", 26, 16, size=22, color=EMBER)
         o.text(f"BEST  {max(life['best_score'], world.score):07d}", 26, 46,
                size=16, color=DIM)
 
         frac = (world.multiplier - 1.0) / 4.0
         o.text(f"x{world.multiplier:.1f}", 26, 76, size=18, color=GOLD)
-        o.rect(80, 80, 130, 10, (45, 45, 65, 220))
+        o.rect(80, 80, 130, 10, BAR_BG)
         o.rect(80, 80, 130 * frac, 10, GOLD)
-        o.text(f"GRAZE {world.stats['grazes']}", 26, 100, size=14, color=CYAN)
+        o.text(f"GRAZE {world.stats['grazes']}", 26, 100, size=14, color=ACCENT2)
 
         if self.mode == "campaign" and world.loop > 1:
-            o.text(f"LOOP {world.loop}", 26, 124, size=14, color=RED)
+            o.text(f"LOOP {world.loop}", 26, 124, size=14, color=DANGER)
         elif self.mode == "endless":
             o.text(f"WAVE {world.wave_index + 1}", 26, 124, size=14, color=DIM)
 
         o.text("LIVES", width - 210, 16, size=16, color=DIM)
         for i in range(max(0, world.player.lives)):
-            o.rect(width - 130 + i * 26, 16, 18, 18, RED)
+            o.rect(width - 130 + i * 26, 16, 18, 18, DANGER)
 
         p = world.player
         y = 46
         if p.shield:
-            o.text("[SHIELD]", width - 210, y, size=14, color=CYAN)
+            o.text("[SHIELD]", width - 210, y, size=14, color=ACCENT)
             y += 20
         if p.spread_timer > 0:
             o.text(f"[SPREAD {p.spread_timer:.0f}]", width - 210, y, size=14,
-                   color=GREEN)
+                   color=EMBER)
             y += 20
         if p.rapid_timer > 0:
             o.text(f"[RAPID {p.rapid_timer:.0f}]", width - 210, y, size=14,
@@ -254,13 +255,13 @@ class VoxelHellRun(GameRun):
 
         boss = world.boss
         if boss is not None and boss.alive:
-            o.rect(width / 2 - 260, 22, 520, 18, (45, 45, 65, 230))
-            o.rect(width / 2 - 257, 25, 514 * boss.hp_frac, 12, (235, 70, 70, 255))
-            o.text("DREADNOUGHT", width / 2, 44, size=14, color=RED, center=True)
+            o.rect(width / 2 - 260, 22, 520, 18, BAR_BG)
+            o.rect(width / 2 - 257, 25, 514 * boss.hp_frac, 12, DANGER)
+            o.text("DREADNOUGHT", width / 2, 44, size=14, color=DANGER, center=True)
 
         if world.state in (INTRO, INTERMISSION):
             o.text("GET READY", width / 2, height * 0.5, size=22,
-                   color=WHITE, center=True)
+                   color=TEXT, center=True)
 
 
 def create_run(mode, rng):

@@ -6,6 +6,15 @@ unlockable ships, attract mode, initials entry, local + **global leaderboards**,
 Dockerized backend microservice for the global scores. Demo/experiment that got gloriously
 out of hand.
 
+**Look & feel — Emberlight.** The whole cabinet is lit like firelight against a warm dark.
+One shared palette holds it together — **ember** for score and confirms, **cream** text,
+**honey** highlights — while each game claims its own signature accent from that same set, so
+they feel individual without drifting apart: Voxel Hell → cosmos **iris**, Voxel Breaker →
+crystal **lagoon**, Voxel Serpent → garden **fern**, Voxel Doom → hell **garnet** (with a warm
+doorway of light for the exit), Voxel Crisis → dusk **copper**, Voxel Aim → cool **frost** (so
+its warm targets pop), Voxel Studio → creative **bloom**. It's all one file:
+[game/theme.py](game/theme.py). *(Screenshots below predate the theme.)*
+
 Everything is generated from code — the pixel grids in [game/sprites.py](game/sprites.py)
 become voxel meshes at runtime, and every sound effect and all music is synthesized by
 [tools/gen_sound.py](tools/gen_sound.py) with only the Python stdlib. The soundtrack isn't
@@ -139,7 +148,7 @@ arcade/    game_api.py — the cabinet<->game contract
 games/     voxelhell/ breaker/ serpent/ — world sim, drawing, HUD,
            achievements, demo bot per game; __init__.py registry
 game/      shared engine: sprites (pixel grids), entities, events,
-           audio bank, net client
+           audio bank, net client, theme (Emberlight palette)
 meta/      profile (versioned atomic JSON, v1->v2 migration), stats,
            achievements engine, local leaderboards
 render/    generic voxel scene engine: instanced meshes, numpy particles,

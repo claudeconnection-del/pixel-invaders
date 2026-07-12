@@ -13,7 +13,11 @@ import sys
 import pygame
 
 from game import events as ev
+from game import theme
 from game.assets import AudioBank, MUSIC_END_EVENT
+from game.theme import (
+    TEXT, DIM, GOLD, PANEL, PANEL_DIM, PANEL_SEL, BAR_BG, HAIR,
+)
 from game.entities import InputState
 from game.netclient import ArcadeClient
 from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
@@ -45,12 +49,11 @@ MULTIPLAYER = "multiplayer"
 MP_CODE = "mp_code"
 LOBBY = "lobby"
 
-GREEN = (140, 255, 170, 255)
-DIM = (150, 150, 165, 255)
-WHITE = (235, 235, 240, 255)
-GOLD = (250, 220, 90, 255)
-RED = (255, 110, 100, 255)
-CYAN = (140, 235, 255, 255)
+# Emberlight cabinet palette (see game/theme.py). Screens use semantic tokens
+# (imported up top) so every menu reads as one system.
+EMBER = theme.PRIMARY   # the house colour: titles, score, confirm prompts
+DANGER = theme.DANGER   # loss / locked / offline
+INFO = theme.INFO       # neutral informational accent
 
 MENU_ITEMS = ["PLAY", "MULTIPLAYER", "HANGAR", "SCORES", "ACHIEVEMENTS",
               "STATS", "SETTINGS", "QUIT"]
@@ -871,21 +874,37 @@ class App:
             text, timer = self.wave_banner
             alpha = int(255 * min(1.0, timer / 0.6))
             o.text(text, self.W / 2, self.H * 0.36, size=34,
-                   color=(GREEN[0], GREEN[1], GREEN[2], alpha), center=True)
+                   color=(EMBER[0], EMBER[1], EMBER[2], alpha), center=True)
         y = 120
         for achievement, timer in self.toasts:
             slide = min(1.0, (3.5 - timer) * 5)
             x = self.W - 20 - 360 * slide
-            o.rect(x, y, 360, 58, (25, 30, 45, 235))
+            o.rect(x, y, 360, 58, PANEL)
             o.rect(x, y, 4, 58, GOLD)
             o.text("ACHIEVEMENT UNLOCKED", x + 16, y + 8, size=13, color=GOLD)
-            o.text(achievement.name, x + 16, y + 28, size=18, color=WHITE)
+            o.text(achievement.name, x + 16, y + 28, size=18, color=TEXT)
             y += 70
+
+    def _draw_spark(self, o, cx, cy, r, color):
+        """A small 4-point Emberlight spark drawn from thin rects (no font
+        glyph, so it renders anywhere) with a bright core."""
+        o.rect(cx - 1, cy - r, 2, 2 * r, color)       # vertical arm
+        o.rect(cx - r, cy - 1, 2 * r, 2, color)       # horizontal arm
+        o.rect(cx - 3, cy - 3, 6, 6, color)           # core
 
     def draw_menu(self):
         o = self.renderer.overlay
         info = self.game.INFO
-        o.text("PIXEL INVADERS ARCADE", self.W / 2, 64, size=44, color=GREEN,
+        accent = theme.for_game(self.game_id).accent
+
+        title = "PIXEL INVADERS ARCADE"
+        o.text(title, self.W / 2, 64, size=44, color=EMBER, center=True)
+        # ember sparks flanking the title + a quiet family subtitle
+        pulse = int(190 + 60 * math.sin(self.renderer.time * 2.2))
+        tw = o.text_width(title, size=44)
+        for sx in (self.W / 2 - tw / 2 - 34, self.W / 2 + tw / 2 + 34):
+            self._draw_spark(o, sx, 88, 9, (GOLD[0], GOLD[1], GOLD[2], pulse))
+        o.text("an Emberlight cabinet", self.W / 2, 108, size=14, color=DIM,
                center=True)
 
         rows = self.menu_rows()
@@ -893,7 +912,9 @@ class App:
 
         # menu panel: everything textual lives inside; on wide screens the
         # showcase model gets the right third to itself, on narrow/square
-        # screens the panel centers and the model is skipped
+        # screens the panel centers and the model is skipped. The panel is
+        # lit in the *selected game's* signature colour — unity (ember title)
+        # plus individuality (the accent moves with your pick).
         panel_w = 560
         aspect = self.renderer.width / self.renderer.height
         if aspect >= 1.25:
@@ -903,34 +924,34 @@ class App:
         label_x, value_x = panel_x + 46, panel_x + 230
         row_h = 48
         panel_h = 40 + row_h * (len(rows) + 1) + 26  # rows + tagline + footer
-        panel_y = max(130, (self.H - panel_h) // 2 - 30)
-        o.rect(panel_x, panel_y, panel_w, panel_h, (14, 17, 28, 215))
-        o.rect(panel_x, panel_y, 4, panel_h, GREEN)
+        panel_y = max(148, (self.H - panel_h) // 2 - 30)
+        o.rect(panel_x, panel_y, panel_w, panel_h, PANEL)
+        o.rect(panel_x, panel_y, 4, panel_h, accent)
 
         y = panel_y + 28
         for i, row in enumerate(rows):
             selected = i == self.menu_index
             if selected:
-                o.rect(panel_x + 10, y - 8, panel_w - 20, 38, (40, 48, 70, 160))
+                o.rect(panel_x + 10, y - 8, panel_w - 20, 38, PANEL_SEL)
             if row == "CATEGORY":
                 label = category_of(self.game_id)
                 o.text("CATEGORY", label_x, y, size=20,
-                       color=WHITE if selected else DIM)
+                       color=TEXT if selected else DIM)
                 o.text(f"< {label} >" if selected else label,
                        value_x, y, size=20, color=GOLD if selected else DIM)
                 y += row_h
             elif row == "GAME":
                 o.text("GAME", label_x, y, size=20,
-                       color=WHITE if selected else DIM)
+                       color=TEXT if selected else DIM)
                 o.text(f"< {info.name} >" if selected else info.name,
-                       value_x, y, size=20, color=RED if selected else WHITE)
+                       value_x, y, size=20, color=accent if selected else TEXT)
                 y += 34
                 o.text(info.tagline, label_x, y, size=14, color=DIM)
                 y += row_h
             else:
                 prefix = "> " if selected else "  "
                 o.text(prefix + row, label_x, y, size=23,
-                       color=WHITE if selected else DIM)
+                       color=TEXT if selected else DIM)
                 y += row_h
 
         life = self.section["lifetime"]
@@ -941,18 +962,20 @@ class App:
         o.text(summary, panel_x + panel_w / 2, y + 8, size=15, color=GOLD,
                center=True)
 
+        o.text("the light stays on", self.W / 2, self.H - 58, size=13,
+               color=theme.FAINT, center=True)
         o.text("Left/Right: change   C: CRT   M: music   Esc: quit",
                self.W / 2, self.H - 36, size=15, color=DIM, center=True)
         self.draw_banner_and_toasts()
 
     def draw_mode_select(self):
         o = self.renderer.overlay
-        o.text(self.game.INFO.name, self.W / 2, 160, size=40, color=GREEN,
+        o.text(self.game.INFO.name, self.W / 2, 160, size=40, color=EMBER,
                center=True)
         o.text("SELECT MODE", self.W / 2, 260, size=22, color=DIM, center=True)
         for i, (mode_id, label) in enumerate(self.game.INFO.modes):
             selected = i == self.mode_index
-            color = WHITE if selected else DIM
+            color = TEXT if selected else DIM
             prefix = "> " if selected else "  "
             o.text(prefix + label, self.W / 2 - 80, 340 + i * 52, size=30,
                    color=color)
@@ -966,18 +989,18 @@ class App:
         unlocked = skin_id in self.section["unlocked_skins"]
         selected = skin_id == self.section["selected_skin"]
 
-        o.text("HANGAR", self.W / 2, 90, size=44, color=GREEN, center=True)
+        o.text("HANGAR", self.W / 2, 90, size=44, color=EMBER, center=True)
         o.text(f"< {skin['name']} >", self.W / 2, 560, size=32,
-               color=WHITE if unlocked else DIM, center=True)
+               color=TEXT if unlocked else DIM, center=True)
         o.text(skin["desc"], self.W / 2, 610, size=16, color=DIM, center=True)
         if not unlocked:
             req = next(a for a in module.ACHIEVEMENTS if a.id == skin["unlock"])
             o.text(f"LOCKED — {req.name}: {req.desc}", self.W / 2, 650, size=16,
-                   color=RED, center=True)
+                   color=DANGER, center=True)
         elif selected:
             o.text("[ EQUIPPED ]", self.W / 2, 650, size=18, color=GOLD, center=True)
         else:
-            o.text("Enter to equip", self.W / 2, 650, size=16, color=GREEN,
+            o.text("Enter to equip", self.W / 2, 650, size=16, color=EMBER,
                    center=True)
         o.text(f"{self.skin_index + 1}/{len(module.SKIN_ORDER)}   Esc: back",
                self.W / 2, self.H - 40, size=14, color=DIM, center=True)
@@ -987,7 +1010,7 @@ class App:
         module = self.game
         engine = self.run_engine or self.engine_for_current_game()
         o.text(f"{module.INFO.name} — ACHIEVEMENTS", self.W / 2, 55, size=32,
-               color=GREEN, center=True)
+               color=EMBER, center=True)
         col_w = 590
         run_stats = self.run.run_stats() if self.run else {}
         for i, a in enumerate(module.ACHIEVEMENTS):
@@ -996,21 +1019,21 @@ class App:
             x = 60 + col * col_w
             y = 118 + row * 98
             unlocked = engine.is_unlocked(a.id)
-            o.rect(x, y, col_w - 40, 84, (25, 30, 45, 200))
-            o.rect(x, y, 4, 84, GOLD if unlocked else (70, 70, 85, 255))
+            o.rect(x, y, col_w - 40, 84, PANEL_DIM)
+            o.rect(x, y, 4, 84, GOLD if unlocked else HAIR)
             o.text(a.name, x + 18, y + 8, size=18,
-                   color=GOLD if unlocked else WHITE)
+                   color=GOLD if unlocked else TEXT)
             o.text(a.desc, x + 18, y + 34, size=13, color=DIM)
             if unlocked:
-                o.text("UNLOCKED", x + col_w - 150, y + 8, size=13, color=GREEN)
+                o.text("UNLOCKED", x + col_w - 150, y + 8, size=13, color=EMBER)
             elif a.progress is not None:
                 try:
                     cur, target = a.progress(self.section["lifetime"], run_stats)
                 except (KeyError, TypeError):
                     cur, target = 0, 1
                 frac = min(1.0, cur / target)
-                o.rect(x + 18, y + 58, col_w - 90, 8, (45, 45, 65, 255))
-                o.rect(x + 18, y + 58, (col_w - 90) * frac, 8, CYAN)
+                o.rect(x + 18, y + 58, col_w - 90, 8, BAR_BG)
+                o.rect(x + 18, y + 58, (col_w - 90) * frac, 8, INFO)
                 o.text(f"{cur}/{target}", x + col_w - 130, y + 52, size=12,
                        color=DIM)
         o.text("Esc: back", self.W / 2, self.H - 26, size=14, color=DIM, center=True)
@@ -1019,7 +1042,7 @@ class App:
         o = self.renderer.overlay
         life = self.section["lifetime"]
         o.text(f"{self.game.INFO.name} — SERVICE RECORD", self.W / 2, 70,
-               size=32, color=GREEN, center=True)
+               size=32, color=EMBER, center=True)
         acc = (life["hits"] / life["shots"]) if life["shots"] else 0.0
         hours = life["playtime"] / 3600
         rows = [
@@ -1038,17 +1061,17 @@ class App:
         for i, (label, value) in enumerate(rows):
             y = 160 + i * 46
             o.text(label, self.W / 2 - 280, y, size=20, color=DIM)
-            o.text(value, self.W / 2 + 120, y, size=20, color=WHITE)
+            o.text(value, self.W / 2 + 120, y, size=20, color=TEXT)
         o.text("Esc: back", self.W / 2, self.H - 30, size=14, color=DIM, center=True)
 
     def draw_settings(self):
         o = self.renderer.overlay
         s = self.profile["settings"]
-        o.text("SETTINGS", self.W / 2, 80, size=44, color=GREEN, center=True)
+        o.text("SETTINGS", self.W / 2, 80, size=44, color=EMBER, center=True)
         for i, (label, key, choices) in enumerate(SETTINGS_ROWS):
             y = 190 + i * 52
             selected = i == self.settings_index
-            color = WHITE if selected else DIM
+            color = TEXT if selected else DIM
             prefix = "> " if selected else "  "
             o.text(prefix + label, self.W / 2 - 330, y, size=24, color=color)
             value = settings_value_label(key, s[key])
@@ -1062,25 +1085,25 @@ class App:
         o = self.renderer.overlay
         s = self.run_summary
         title = "VICTORY" if self.run_won else "GAME OVER"
-        color = GOLD if self.run_won else RED
+        color = GOLD if self.run_won else DANGER
         o.text(title, self.W / 2, 150, size=64, color=color, center=True)
         shown = [(label, fmt.format(s[key])) for key, label, fmt in SUMMARY_ROWS
                  if key in s and not (key == "loop" and s.get("loop", 1) <= 1)]
         for i, (label, value) in enumerate(shown):
             y = 280 + i * 42
             o.text(label, self.W / 2 - 220, y, size=20, color=DIM)
-            o.text(value, self.W / 2 + 120, y, size=20, color=WHITE)
+            o.text(value, self.W / 2 + 120, y, size=20, color=TEXT)
         if self.section["lifetime"]["best_score"] <= s["score"] and s["score"] > 0:
-            o.text("NEW BEST!", self.W / 2, 240, size=22, color=GREEN, center=True)
+            o.text("NEW BEST!", self.W / 2, 240, size=22, color=EMBER, center=True)
         footer = "Enter: back to lobby" if self.mp is not None else "Enter: menu"
-        o.text(footer, self.W / 2, self.H - 60, size=18, color=GREEN,
+        o.text(footer, self.W / 2, self.H - 60, size=18, color=EMBER,
                center=True)
         self.draw_banner_and_toasts()
 
     def draw_paused(self):
         o = self.renderer.overlay
-        o.rect(0, 0, self.W, self.H, (5, 5, 12, 160))
-        o.text("PAUSED", self.W / 2, self.H / 2 - 60, size=48, color=WHITE,
+        o.rect(0, 0, self.W, self.H, (10, 6, 4, 165))
+        o.text("PAUSED", self.W / 2, self.H / 2 - 60, size=48, color=TEXT,
                center=True)
         o.text("Esc: resume    Q: quit to menu", self.W / 2, self.H / 2 + 20,
                size=20, color=DIM, center=True)
@@ -1089,7 +1112,7 @@ class App:
         o = self.renderer.overlay
         modes = self.game.INFO.modes
         o.text(f"{self.game.INFO.name} — MULTIPLAYER", self.W / 2, 120,
-               size=32, color=GREEN, center=True)
+               size=32, color=EMBER, center=True)
         o.text("Everyone plays the same seeded run. Highest score takes it.",
                self.W / 2, 175, size=14, color=DIM, center=True)
 
@@ -1098,10 +1121,10 @@ class App:
         host_text = f"HOST SESSION   < {mode_label} >" if len(modes) > 1 \
             else "HOST SESSION"
         o.text(("> " if host_sel else "  ") + host_text, self.W / 2 - 220, 300,
-               size=26, color=WHITE if host_sel else DIM)
+               size=26, color=TEXT if host_sel else DIM)
         o.text(("> " if not host_sel else "  ") + "JOIN WITH CODE",
                self.W / 2 - 220, 360, size=26,
-               color=WHITE if not host_sel else DIM)
+               color=TEXT if not host_sel else DIM)
 
         name = self.profile["settings"].get("player_name", "AAA")
         o.text(f"Playing as {name}  (set initials via any high score)",
@@ -1114,18 +1137,18 @@ class App:
 
     def draw_mp_code(self):
         o = self.renderer.overlay
-        o.text("ENTER SESSION CODE", self.W / 2, 200, size=30, color=GREEN,
+        o.text("ENTER SESSION CODE", self.W / 2, 200, size=30, color=EMBER,
                center=True)
         for i, ch in enumerate(self.mp_code_entry):
             x = self.W / 2 - 135 + i * 90
             selected = i == self.mp_code_slot
-            o.rect(x - 32, 300, 64, 84, (25, 30, 45, 230))
+            o.rect(x - 32, 300, 64, 84, PANEL)
             if selected:
                 o.rect(x - 32, 384, 64, 5, GOLD)
                 pulse = int(150 + 100 * abs(math.sin(self.renderer.time * 4)))
                 color = (255, 235, 140, pulse)
             else:
-                color = WHITE
+                color = TEXT
             o.text(ch, x, 310, size=52, color=color, center=True)
         o.text("Up/Down: letter   Left/Right: slot   Enter: join   Esc: back",
                self.W / 2, 440, size=14, color=DIM, center=True)
@@ -1136,7 +1159,7 @@ class App:
         module = self.games.get(mp["game"], self.game)
         mode_label = next((label for m, label in module.INFO.modes
                            if m == mp["mode"]), mp["mode"].upper())
-        o.text("SESSION LOBBY", self.W / 2, 80, size=32, color=GREEN,
+        o.text("SESSION LOBBY", self.W / 2, 80, size=32, color=EMBER,
                center=True)
         o.text(f"{module.INFO.name} — {mode_label}", self.W / 2, 130, size=18,
                color=DIM, center=True)
@@ -1152,32 +1175,32 @@ class App:
             y = 300 + i * 46
             me = p["name"] == mp["name"]
             color = GOLD if i == 0 and p["score"] is not None else \
-                (WHITE if me else DIM)
+                (TEXT if me else DIM)
             o.text(f"{i + 1:2d}", self.W / 2 - 280, y, size=22, color=color)
             o.text(p["name"] + (" (you)" if me else ""), self.W / 2 - 210, y,
                    size=22, color=color)
             score = f"{p['score']:,}" if p["score"] is not None else "playing..."
             o.text(score, self.W / 2 + 120, y, size=22, color=color)
         o.text("Enter: play your run   Esc: leave lobby",
-               self.W / 2, self.H - 44, size=15, color=GREEN, center=True)
+               self.W / 2, self.H - 44, size=15, color=EMBER, center=True)
 
     def draw_initials(self):
         o = self.renderer.overlay
         _, _, score, _ = self.pending_board
         o.text("HIGH SCORE!", self.W / 2, 180, size=52, color=GOLD, center=True)
-        o.text(f"{score:,}", self.W / 2, 260, size=30, color=WHITE, center=True)
+        o.text(f"{score:,}", self.W / 2, 260, size=30, color=TEXT, center=True)
         o.text("ENTER YOUR INITIALS", self.W / 2, 340, size=20, color=DIM,
                center=True)
         for i, ch in enumerate(self.initials):
             x = self.W / 2 - 90 + i * 90
             selected = i == self.initials_slot
-            o.rect(x - 32, 400, 64, 84, (25, 30, 45, 230))
+            o.rect(x - 32, 400, 64, 84, PANEL)
             if selected:
                 o.rect(x - 32, 484, 64, 5, GOLD)
                 pulse = int(150 + 100 * abs(math.sin(self.renderer.time * 4)))
                 color = (255, 235, 140, pulse)
             else:
-                color = WHITE
+                color = TEXT
             o.text(ch, x, 410, size=52, color=color, center=True)
         o.text("Up/Down: letter   Left/Right: slot   Enter: confirm",
                self.W / 2, 540, size=14, color=DIM, center=True)
@@ -1187,14 +1210,14 @@ class App:
         modes = self.game.INFO.modes
         mode_id, mode_label = modes[self.board_mode_index % len(modes)]
         o.text(f"{self.game.INFO.name} — HIGH SCORES", self.W / 2, 70, size=32,
-               color=GREEN, center=True)
+               color=EMBER, center=True)
         tab = f"< {mode_label} >" if len(modes) > 1 else mode_label
         o.text(tab, self.W / 2, 122, size=20, color=GOLD, center=True)
 
         if self.net.available:
             scope_label = "LOCAL" if self.board_scope == "local" else "GLOBAL"
             o.text(f"[{scope_label}]  Up/Down: switch", self.W / 2, 152,
-                   size=14, color=CYAN, center=True)
+                   size=14, color=INFO, center=True)
 
         highlight_rank = self.last_rank if self.board_scope == "local" else None
         if self.board_scope == "local":
@@ -1208,7 +1231,7 @@ class App:
                 board = []
             elif data == "error" or data is None:
                 o.text("OFFLINE — couldn't reach the arcade server",
-                       self.W / 2, self.H / 2, size=18, color=RED, center=True)
+                       self.W / 2, self.H / 2, size=18, color=DANGER, center=True)
                 board = []
             else:
                 board = data
@@ -1220,7 +1243,7 @@ class App:
             rank = entry["rank"]
             y = 190 + (rank - 1) * 48
             highlight = highlight_rank == rank
-            color = GOLD if highlight else (WHITE if rank <= 3 else DIM)
+            color = GOLD if highlight else (TEXT if rank <= 3 else DIM)
             if highlight:
                 o.rect(self.W / 2 - 330, y - 6, 660, 40, (45, 40, 20, 180))
             o.text(f"{rank:2d}", self.W / 2 - 300, y, size=24, color=color)
@@ -1244,7 +1267,7 @@ class App:
         o.offset_x = 0.0
         if math.sin(self.renderer.time * 3) > -0.2:
             o.text("PRESS ANY KEY", self.W / 2, self.H * 0.62, size=36,
-                   color=WHITE, center=True)
+                   color=TEXT, center=True)
         o.text(f"DEMO — {module.INFO.name}", self.W / 2, self.H - 44, size=16,
                color=DIM, center=True)
 
