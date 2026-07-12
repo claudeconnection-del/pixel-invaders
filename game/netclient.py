@@ -67,3 +67,28 @@ class ArcadeClient:
             return
         self._request(("scores", game, mode), "GET",
                       f"/api/v1/scores?game={game}&mode={mode}&limit={limit}")
+
+    # ------------------------------------------------- multiplayer sessions
+    def create_session(self, game, mode, host):
+        if not self.available:
+            return
+        self._request("session_create", "POST", "/api/v1/sessions",
+                      {"game": game, "mode": mode, "host": host})
+
+    def join_session(self, code, name):
+        if not self.available:
+            return
+        self._request("session_join", "POST",
+                      f"/api/v1/sessions/{code}/join", {"name": name})
+
+    def submit_session_score(self, code, name, score, wave=None):
+        if not self.available:
+            return
+        self._request("session_score", "POST",
+                      f"/api/v1/sessions/{code}/scores",
+                      {"name": name, "score": score, "wave": wave})
+
+    def get_session(self, code):
+        if not self.available:
+            return
+        self._request("session_state", "GET", f"/api/v1/sessions/{code}")

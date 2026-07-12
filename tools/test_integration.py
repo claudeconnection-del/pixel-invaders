@@ -79,6 +79,46 @@ def main():
         assert "MSE" in page and "VOXEL HELL" in page
         print("scoreboard embed page OK")
 
+        # multiplayer sessions through the game client: host + join, same
+        # seed, both submit, lobby board sorts
+        host = ArcadeClient(BASE)
+        host.create_session("voxelhell", "campaign", "MSE")
+        (tag, payload), = drain(host, 1)
+        assert tag == "session_create" and payload is not None
+        code, seed = payload["code"], payload["seed"]
+
+        friend = ArcadeClient(BASE)
+        friend.join_session(code, "BUN")
+        (tag, payload), = drain(friend, 1)
+        assert tag == "session_join" and payload["seed"] == seed
+        assert {p["name"] for p in payload["players"]} == {"MSE", "BUN"}
+
+        # both players race the same seeded world — identical waves
+        import random
+        from games.voxelhell.world import World
+        from games.voxelhell.bot import demo_bot
+        scores = {}
+        for name in ("MSE", "BUN"):
+            w = World(rng=random.Random(seed), mode="campaign")
+            for _ in range(60 * 30):
+                w.update(1 / 60, demo_bot(w))
+                w.drain_events()
+                if w.run_over:
+                    break
+            scores[name] = w.score
+        assert scores["MSE"] == scores["BUN"], "same seed must be a fair race"
+
+        host.submit_session_score(code, "MSE", scores["MSE"] + 500, wave=6)
+        friend.submit_session_score(code, "BUN", scores["BUN"], wave=5)
+        drain(host, 1)
+        drain(friend, 1)
+        host.get_session(code)
+        (tag, payload), = drain(host, 1)
+        players = payload["players"]
+        assert players[0]["name"] == "MSE" and players[1]["name"] == "BUN"
+        assert players[0]["score"] == scores["MSE"] + 500
+        print(f"multiplayer session OK (code={code}, fair seed verified)")
+
         # offline degradation: dead port must yield None results, no raise
         dead = ArcadeClient("http://127.0.0.1:1")
         dead.submit_score("voxelhell", "campaign", "AAA", 1)

@@ -91,10 +91,46 @@ def test_boards_daily_scoreboard():
     print("boards + daily + scoreboard OK")
 
 
+def test_sessions():
+    db.reset_for_tests()
+    # host a session
+    r = client.post("/api/v1/sessions", json={
+        "game": "voxelhell", "mode": "campaign", "host": "moose"})
+    assert r.status_code == 200
+    body = r.json()
+    code, seed = body["code"], body["seed"]
+    assert len(code) == 4 and isinstance(seed, int)
+
+    # join: ok, duplicate name rejected, bad code 404
+    r = client.post(f"/api/v1/sessions/{code}/join", json={"name": "bun"})
+    assert r.status_code == 200
+    assert {p["name"] for p in r.json()["players"]} == {"MOOSE", "BUN"}
+    assert r.json()["seed"] == seed
+    r = client.post(f"/api/v1/sessions/{code}/join", json={"name": "bun"})
+    assert r.status_code == 409
+    r = client.post("/api/v1/sessions/ZZZZ/join", json={"name": "who"})
+    assert r.status_code == 404
+
+    # scores: best kept, outsiders rejected, board sorted
+    for name, score in (("moose", 5000), ("bun", 7000), ("moose", 4000)):
+        r = client.post(f"/api/v1/sessions/{code}/scores",
+                        json={"name": name, "score": score, "wave": 3})
+        assert r.status_code == 200
+    r = client.post(f"/api/v1/sessions/{code}/scores",
+                    json={"name": "intruder", "score": 1})
+    assert r.status_code == 404
+    session = client.get(f"/api/v1/sessions/{code}").json()
+    players = session["players"]
+    assert players[0]["name"] == "BUN" and players[0]["score"] == 7000
+    assert players[1]["name"] == "MOOSE" and players[1]["score"] == 5000
+    print("sessions OK (host/join/score/sort/validation)")
+
+
 if __name__ == "__main__":
     test_health()
     test_submit_and_rank()
     test_validation()
     test_api_key()
     test_boards_daily_scoreboard()
+    test_sessions()
     print("ALL SERVER TESTS PASSED")

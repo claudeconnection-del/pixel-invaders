@@ -23,6 +23,9 @@ boss fights.
 
 ## The games
 
+Two categories on the cabinet menu (Left/Right on the CATEGORY row):
+
+**CLASSICS +**
 - **Voxel Hell** — bullet-hell invaders. Campaign (5 waves + 3-phase boss, then endless
   harder **loops**) and procedural **endless** mode with a boss every 5th sector. Focus
   movement, graze-for-multiplier scoring, power-ups, 14 achievements, 6 unlockable ship
@@ -31,6 +34,16 @@ boss fights.
   levels that loop armored, multi-ball/wide/laser power-ups, 8 achievements.
 - **Voxel Serpent** — grid snake with a speed curve, rare gold fruit, obstacle walls that
   grow with your appetite, 6 achievements.
+
+**FPS**
+- **Voxel Doom** — first-person dungeon shooter: three floors of instanced-voxel corridors,
+  imps and gunners with line-of-sight AI, hitscan pistol (fists when dry), medkits and ammo,
+  a pixel gun viewmodel with bob/kick/muzzle flash. Turn with Left/Right, strafe with Shift.
+- **Voxel Crisis** — on-rails cover shooter: the camera rides six zones, troopers pop from
+  cover with telegraphed shots, **duck with Shift to dodge and reload** your 8-round clip,
+  quick-kill bonuses, and the Dread Captain at the end. Mouse aim.
+- **Voxel Aim** — gridshot aim trainer: 60-second score attack with combo multiplier,
+  accuracy and reaction-time stats. Mouse aim.
 - **Voxel Studio** — the cabinet's music workstation. Every property of the composition
   engine is editable (tempo, chord progression, bass style, drum kit + fills, lead voice,
   shimmer, bars, note density, melody seed), with live preview against a voxel equalizer.
@@ -68,6 +81,14 @@ boots fullscreen straight into attract mode.
 particle density, CRT, volumes, FPS counter. **Attract mode** starts after 15s idle on the
 menu — a bot plays the cabinet's games until you press something. Qualifying scores get
 3-letter **initials entry** into local top-10 boards per game/mode.
+
+## Multiplayer
+
+With the backend deployed (see [DEPLOY.md](DEPLOY.md)), every scored game gains a
+**MULTIPLAYER** menu entry: host a session (pick the mode, get a 4-letter code) or join
+with a code. Everyone in the session plays **the same seeded run** — identical waves,
+levels, and spawns — and scores post to a live lobby standings board. Async by design:
+race now, let family beat your score after dinner. Sessions expire after 24h.
 
 ## Global leaderboards (the microservice)
 

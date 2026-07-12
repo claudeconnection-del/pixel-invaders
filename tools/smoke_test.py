@@ -149,7 +149,9 @@ def main():
             assert app.state == game_main.MENU
         elif app.state == game_main.RUN_END:
             app.handle_keydown(pygame.K_RETURN)
-            assert app.state == game_main.MENU
+            if app.state == game_main.INITIALS:  # qualifying score: skip entry
+                app.handle_keydown(pygame.K_ESCAPE)
+            assert app.state == game_main.MENU, app.state
 
     app.game_id = "voxelhell"
 

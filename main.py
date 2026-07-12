@@ -40,6 +40,9 @@ RUN_END = "run_end"
 INITIALS = "initials"
 LEADERBOARD = "leaderboard"
 ATTRACT = "attract"
+MULTIPLAYER = "multiplayer"
+MP_CODE = "mp_code"
+LOBBY = "lobby"
 
 GREEN = (140, 255, 170, 255)
 DIM = (150, 150, 165, 255)
@@ -48,8 +51,8 @@ GOLD = (250, 220, 90, 255)
 RED = (255, 110, 100, 255)
 CYAN = (140, 235, 255, 255)
 
-MENU_ITEMS = ["PLAY", "HANGAR", "SCORES", "ACHIEVEMENTS", "STATS", "SETTINGS",
-              "QUIT"]
+MENU_ITEMS = ["PLAY", "MULTIPLAYER", "HANGAR", "SCORES", "ACHIEVEMENTS",
+              "STATS", "SETTINGS", "QUIT"]
 
 # (label, settings key, choices) — Left/Right cycles; floats step by 0.1
 SETTINGS_ROWS = [
@@ -149,6 +152,15 @@ class App:
         self.net = ArcadeClient(self.profile["settings"].get("server_url", ""))
         self.board_scope = "local"        # local | global
         self.global_boards = {}           # (game, mode) -> list | "pending" | None
+
+        # multiplayer session state
+        self.mp = None            # {code, seed, game, mode, players, name}
+        self.mp_menu_index = 0    # 0 host / 1 join
+        self.mp_mode_index = 0
+        self.mp_status = ""
+        self.mp_code_entry = list("AAAA")
+        self.mp_code_slot = 0
+        self.mp_poll_timer = 0.0
         self.initials = list(self.profile["settings"].get("player_name", "AAA"))
         self.initials_slot = 0
         self.pending_board = None    # (game_id, mode, score, extra) awaiting initials
@@ -281,6 +293,69 @@ class App:
                 self.audio.music("menu")
             return
 
+        if self.state == MULTIPLAYER:
+            modes = self.game.INFO.modes
+            if key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s):
+                self.mp_menu_index = 1 - self.mp_menu_index
+                audio.play("menu_move")
+            elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d) \
+                    and self.mp_menu_index == 0 and len(modes) > 1:
+                self.mp_mode_index = (self.mp_mode_index + 1) % len(modes)
+                audio.play("menu_move")
+            elif key == pygame.K_RETURN:
+                audio.play("menu_select")
+                if self.mp_menu_index == 0:  # host
+                    mode_id = modes[self.mp_mode_index][0]
+                    name = self.profile["settings"].get("player_name", "AAA")
+                    self.mp_status = "Creating session..."
+                    self.net.create_session(self.game_id, mode_id, name)
+                else:  # join
+                    self.mp_code_entry = list("AAAA")
+                    self.mp_code_slot = 0
+                    self.state = MP_CODE
+            elif key == pygame.K_ESCAPE:
+                self.state = MENU
+            return
+
+        if self.state == MP_CODE:
+            if key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s):
+                direction = -1 if key in (pygame.K_UP, pygame.K_w) else 1
+                ch = self.mp_code_entry[self.mp_code_slot]
+                chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                idx = chars.find(ch)
+                self.mp_code_entry[self.mp_code_slot] = \
+                    chars[(idx + direction) % len(chars)]
+                audio.play("menu_move")
+            elif key in (pygame.K_LEFT, pygame.K_a):
+                self.mp_code_slot = max(0, self.mp_code_slot - 1)
+                audio.play("menu_move")
+            elif key in (pygame.K_RIGHT, pygame.K_d):
+                self.mp_code_slot = min(3, self.mp_code_slot + 1)
+                audio.play("menu_move")
+            elif key == pygame.K_RETURN:
+                if self.mp_code_slot < 3:
+                    self.mp_code_slot += 1
+                    audio.play("menu_move")
+                else:
+                    code = "".join(self.mp_code_entry)
+                    name = self.profile["settings"].get("player_name", "AAA")
+                    self.mp_status = f"Joining {code}..."
+                    self.net.join_session(code, name)
+                    audio.play("menu_select")
+                    self.state = MULTIPLAYER
+            elif key == pygame.K_ESCAPE:
+                self.state = MULTIPLAYER
+            return
+
+        if self.state == LOBBY:
+            if key == pygame.K_RETURN:
+                audio.play("menu_select")
+                self.start_run(self.mp["mode"], seed=self.mp["seed"])
+            elif key == pygame.K_ESCAPE:
+                self.mp = None
+                self.state = MENU
+            return
+
         if self.state == MENU:
             rows = self.menu_rows()
             self.menu_index = min(self.menu_index, len(rows) - 1)
@@ -379,7 +454,11 @@ class App:
 
         elif self.state == RUN_END:
             if key == pygame.K_RETURN:
-                if self.pending_board is not None:
+                if self.mp is not None:
+                    self.state = LOBBY
+                    self.mp_poll_timer = 0.0
+                    self.audio.music("menu")
+                elif self.pending_board is not None:
                     self.initials = list(
                         (self.profile["settings"].get("player_name", "AAA") + "AAA")[:3])
                     self.initials_slot = 0
@@ -403,7 +482,9 @@ class App:
         info = self.game.INFO
         actions = [m for m in MENU_ITEMS
                    if (m != "HANGAR" or info.has_skins)
-                   and (m != "SCORES" or info.has_scores)]
+                   and (m != "SCORES" or info.has_scores)
+                   and (m != "MULTIPLAYER"
+                        or (info.has_scores and self.net.available))]
         return ["CATEGORY", "GAME"] + actions
 
     def cycle_category(self, direction):
@@ -439,6 +520,11 @@ class App:
                 selected = self.section["selected_skin"]
                 self.skin_index = order.index(selected) if selected in order else 0
                 self.state = HANGAR
+        elif choice == "MULTIPLAYER":
+            self.mp_menu_index = 0
+            self.mp_mode_index = 0
+            self.mp_status = ""
+            self.state = MULTIPLAYER
         elif choice == "SCORES":
             if self.game.INFO.has_scores:
                 self.board_mode_index = 0
@@ -453,8 +539,8 @@ class App:
             self.quit()
 
     # ---------------------------------------------------------------- runs
-    def start_run(self, mode):
-        self.run = self.game.create_run(mode, random.Random())
+    def start_run(self, mode, seed=None):
+        self.run = self.game.create_run(mode, random.Random(seed))
         if hasattr(self.run, "attach_profile"):
             self.run.attach_profile(self.section, self.profile["settings"],
                                     self.save_profile)
@@ -509,6 +595,38 @@ class App:
             elif tag == "submit" and payload is not None:
                 self.post_banner(f"GLOBAL RANK #{payload['rank']}", 3.0)
                 self.audio.play("toast")
+            elif tag == "session_create":
+                if payload is None:
+                    self.mp_status = "OFFLINE — couldn't reach the server"
+                else:
+                    self._enter_lobby(payload, host=True)
+            elif tag == "session_join":
+                if payload is None:
+                    self.mp_status = "Join failed — bad code, taken name, or offline"
+                else:
+                    self._enter_lobby(payload, host=False)
+            elif tag in ("session_state", "session_score"):
+                if payload is not None and self.mp is not None \
+                        and payload.get("code") == self.mp["code"]:
+                    self.mp["players"] = payload.get("players", [])
+
+    def _enter_lobby(self, payload, host):
+        name = self.profile["settings"].get("player_name", "AAA").upper().strip()
+        gid = payload.get("game", self.game_id)
+        if gid in self.games:
+            self.game_id = gid
+        self.mp = {
+            "code": payload["code"],
+            "seed": payload["seed"],
+            "game": gid,
+            "mode": payload.get("mode", self.game.INFO.modes[0][0]),
+            "players": payload.get("players", []),
+            "name": name,
+        }
+        self.mp_status = ""
+        self.mp_poll_timer = 0.0
+        self.state = LOBBY
+        self.audio.play("toast")
 
     # -------------------------------------------------------------- attract
     def start_attract(self):
@@ -550,7 +668,7 @@ class App:
             life["runs"] += 1
         self.run = None
         self.save_profile()
-        self.state = MENU
+        self.state = LOBBY if self.mp is not None else MENU
         self.audio.music("menu")
 
     def quit(self):
@@ -687,7 +805,12 @@ class App:
             self.state = RUN_END
             self.audio.music(None)
             score = self.run_summary["score"]
-            if lb.qualifies(self.profile, self.game_id, self.run_mode, score):
+            if self.mp is not None:
+                # session runs report to the lobby, not the initials flow
+                self.net.submit_session_score(
+                    self.mp["code"], self.mp["name"], score,
+                    self.run_summary.get("wave_reached"))
+            elif lb.qualifies(self.profile, self.game_id, self.run_mode, score):
                 extra = {}
                 if "wave_reached" in self.run_summary:
                     extra["wave"] = self.run_summary["wave_reached"]
@@ -886,7 +1009,8 @@ class App:
             o.text(value, WIDTH / 2 + 120, y, size=20, color=WHITE)
         if self.section["lifetime"]["best_score"] <= s["score"] and s["score"] > 0:
             o.text("NEW BEST!", WIDTH / 2, 240, size=22, color=GREEN, center=True)
-        o.text("Enter: menu", WIDTH / 2, HEIGHT - 60, size=18, color=GREEN,
+        footer = "Enter: back to lobby" if self.mp is not None else "Enter: menu"
+        o.text(footer, WIDTH / 2, HEIGHT - 60, size=18, color=GREEN,
                center=True)
         self.draw_banner_and_toasts()
 
@@ -897,6 +1021,82 @@ class App:
                center=True)
         o.text("Esc: resume    Q: quit to menu", WIDTH / 2, HEIGHT / 2 + 20,
                size=20, color=DIM, center=True)
+
+    def draw_multiplayer(self):
+        o = self.renderer.overlay
+        modes = self.game.INFO.modes
+        o.text(f"{self.game.INFO.name} — MULTIPLAYER", WIDTH / 2, 120,
+               size=32, color=GREEN, center=True)
+        o.text("Everyone plays the same seeded run. Highest score takes it.",
+               WIDTH / 2, 175, size=14, color=DIM, center=True)
+
+        host_sel = self.mp_menu_index == 0
+        mode_label = modes[self.mp_mode_index % len(modes)][1]
+        host_text = f"HOST SESSION   < {mode_label} >" if len(modes) > 1 \
+            else "HOST SESSION"
+        o.text(("> " if host_sel else "  ") + host_text, WIDTH / 2 - 220, 300,
+               size=26, color=WHITE if host_sel else DIM)
+        o.text(("> " if not host_sel else "  ") + "JOIN WITH CODE",
+               WIDTH / 2 - 220, 360, size=26,
+               color=WHITE if not host_sel else DIM)
+
+        name = self.profile["settings"].get("player_name", "AAA")
+        o.text(f"Playing as {name}  (set initials via any high score)",
+               WIDTH / 2, 460, size=14, color=DIM, center=True)
+        if self.mp_status:
+            o.text(self.mp_status, WIDTH / 2, 520, size=16, color=GOLD,
+                   center=True)
+        o.text("Enter: select   Esc: back", WIDTH / 2, HEIGHT - 40, size=14,
+               color=DIM, center=True)
+
+    def draw_mp_code(self):
+        o = self.renderer.overlay
+        o.text("ENTER SESSION CODE", WIDTH / 2, 200, size=30, color=GREEN,
+               center=True)
+        for i, ch in enumerate(self.mp_code_entry):
+            x = WIDTH / 2 - 135 + i * 90
+            selected = i == self.mp_code_slot
+            o.rect(x - 32, 300, 64, 84, (25, 30, 45, 230))
+            if selected:
+                o.rect(x - 32, 384, 64, 5, GOLD)
+                pulse = int(150 + 100 * abs(math.sin(self.renderer.time * 4)))
+                color = (255, 235, 140, pulse)
+            else:
+                color = WHITE
+            o.text(ch, x, 310, size=52, color=color, center=True)
+        o.text("Up/Down: letter   Left/Right: slot   Enter: join   Esc: back",
+               WIDTH / 2, 440, size=14, color=DIM, center=True)
+
+    def draw_lobby(self):
+        o = self.renderer.overlay
+        mp = self.mp
+        module = self.games.get(mp["game"], self.game)
+        mode_label = next((label for m, label in module.INFO.modes
+                           if m == mp["mode"]), mp["mode"].upper())
+        o.text("SESSION LOBBY", WIDTH / 2, 80, size=32, color=GREEN,
+               center=True)
+        o.text(f"{module.INFO.name} — {mode_label}", WIDTH / 2, 130, size=18,
+               color=DIM, center=True)
+        o.text(mp["code"], WIDTH / 2, 175, size=56, color=GOLD, center=True)
+        o.text("share this code", WIDTH / 2, 240, size=13, color=DIM,
+               center=True)
+
+        players = mp.get("players", [])
+        if not players:
+            o.text("waiting for players...", WIDTH / 2, 330, size=16,
+                   color=DIM, center=True)
+        for i, p in enumerate(players):
+            y = 300 + i * 46
+            me = p["name"] == mp["name"]
+            color = GOLD if i == 0 and p["score"] is not None else \
+                (WHITE if me else DIM)
+            o.text(f"{i + 1:2d}", WIDTH / 2 - 280, y, size=22, color=color)
+            o.text(p["name"] + (" (you)" if me else ""), WIDTH / 2 - 210, y,
+                   size=22, color=color)
+            score = f"{p['score']:,}" if p["score"] is not None else "playing..."
+            o.text(score, WIDTH / 2 + 120, y, size=22, color=color)
+        o.text("Enter: play your run   Esc: leave lobby",
+               WIDTH / 2, HEIGHT - 44, size=15, color=GREEN, center=True)
 
     def draw_initials(self):
         o = self.renderer.overlay
@@ -1051,6 +1251,12 @@ class App:
             self.draw_initials()
         elif self.state == LEADERBOARD:
             self.draw_leaderboard()
+        elif self.state == MULTIPLAYER:
+            self.draw_multiplayer()
+        elif self.state == MP_CODE:
+            self.draw_mp_code()
+        elif self.state == LOBBY:
+            self.draw_lobby()
         elif self.state == ATTRACT:
             self.draw_attract_overlay()
         if self.profile["settings"].get("show_fps"):
@@ -1082,6 +1288,11 @@ class App:
 
             self.poll_pad_navigation(dt)
             self.poll_network()
+            if self.state == LOBBY and self.mp is not None:
+                self.mp_poll_timer -= dt
+                if self.mp_poll_timer <= 0:
+                    self.mp_poll_timer = 2.5
+                    self.net.get_session(self.mp["code"])
             self.update_timers(dt)
             if self.state == PLAYING:
                 self.update_playing(dt)
