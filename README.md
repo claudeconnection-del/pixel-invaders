@@ -1,95 +1,135 @@
-# Pixel Invaders: Voxel Hell
+# Pixel Invaders Arcade
 
-An 8-bit Space Invaders clone that got completely out of hand: a **3D voxel bullet-hell**
-rendered with raw OpenGL, with GPU particles, bloom + CRT post-processing, a 5-wave campaign
-plus a multi-phase boss, graze scoring, power-ups, achievements, unlockable ships, lifetime
-stat tracking, and fully generated chiptune music. Demo/experiment.
+A multi-game **8-bit voxel arcade cabinet** in Python: three enhanced classics rendered with
+raw OpenGL (voxel sprites, GPU particles, bloom + CRT post-processing), with achievements,
+unlockable ships, attract mode, initials entry, local + **global leaderboards**, and a
+Dockerized backend microservice for the global scores. Demo/experiment that got gloriously
+out of hand.
 
-Everything is still self-contained: **all art and audio are generated from code** — the pixel
-grids in [game/sprites.py](game/sprites.py) are extruded into voxel cube meshes at runtime,
-and every sound effect and music loop is synthesized by [tools/gen_sound.py](tools/gen_sound.py)
-with nothing but the Python stdlib.
+Everything is generated from code — the pixel grids in [game/sprites.py](game/sprites.py)
+become voxel meshes at runtime, and every sound effect and chiptune loop is synthesized by
+[tools/gen_sound.py](tools/gen_sound.py) with only the Python stdlib.
 
-![boss fight](docs/screenshot.png)
-![wave gameplay](docs/screenshot_wave.png)
+| | |
+|---|---|
+| ![voxel hell](docs/screenshot.png) | ![breaker](docs/screenshot_breaker.png) |
+| **Voxel Hell** — bullet-hell invaders | **Voxel Breaker** — brick demolition |
+| ![serpent](docs/screenshot_serpent.png) | ![wave](docs/screenshot_wave.png) |
+| **Voxel Serpent** — glowing snake | Voxel Hell, wave combat |
 
-## Play
+## The games
 
-```powershell
+- **Voxel Hell** — bullet-hell invaders. Campaign (5 waves + 3-phase boss, then endless
+  harder **loops**) and procedural **endless** mode with a boss every 5th sector. Focus
+  movement, graze-for-multiplier scoring, power-ups, 14 achievements, 6 unlockable ship
+  skins in the Hangar.
+- **Voxel Breaker** — paddle/ball brick demolition with a combo multiplier, 5 authored
+  levels that loop armored, multi-ball/wide/laser power-ups, 8 achievements.
+- **Voxel Serpent** — grid snake with a speed curve, rare gold fruit, obstacle walls that
+  grow with your appetite, 6 achievements.
+
+Adding a game = one folder under `games/` implementing the small interface in
+[arcade/game_api.py](arcade/game_api.py) plus a registry line.
+
+## Play (Windows / macOS / Linux)
+
+```bash
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python main.py
+# Windows:  .venv\Scripts\pip install -r requirements.txt && .venv\Scripts\python main.py
+# mac/linux: .venv/bin/pip install -r requirements.txt && .venv/bin/python main.py
 ```
 
-(macOS/Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python main.py`.
-Requires OpenGL 3.3.)
+Requires OpenGL 3.3 (works on macOS's deprecated-but-functional GL stack; the forward-compat
+core-profile flag is set automatically). Gamepads supported (Xbox-style layout). `--kiosk`
+boots fullscreen straight into attract mode.
 
 | Key | Action |
 |---|---|
-| Arrows / WASD | Move |
-| Space (hold) | Autofire |
-| **Shift (hold)** | Focus: half speed + show hitbox |
-| Enter | Confirm / start |
-| Esc | Pause / back |
-| C | Toggle CRT filter |
-| M | Toggle music |
+| Arrows / WASD / stick | Move + menu navigation |
+| Space / A button (hold) | Fire |
+| Shift / shoulders | Focus (Voxel Hell), slow paddle (Breaker) |
+| Enter / Start | Confirm |
+| Esc / B | Pause / back |
+| C / M | CRT filter / music |
 
-## How it plays
+**Settings** (persisted): FPS cap 60–240/unlimited, vsync, fullscreen, bloom quality,
+particle density, CRT, volumes, FPS counter. **Attract mode** starts after 15s idle on the
+menu — a bot plays the cabinet's games until you press something. Qualifying scores get
+3-letter **initials entry** into local top-10 boards per game/mode.
 
-- **Campaign**: 5 authored waves (aimed fans → radial bursts → spirals → bullet walls →
-  everything at once), then the **Dreadnought** — a 3-phase boss with escalating patterns.
-- **Graze** enemy bullets (pass close without being hit) to build a score multiplier up to x5.
-  Your hitbox is the tiny glowing core, not the whole ship — hold Shift to see it.
-- **Power-ups** drop from kills: spread shot, rapid fire, one-hit shield.
-- Getting hit clears the screen (mercy rule) and resets your multiplier. 3 lives.
-- **12 achievements** unlock **6 ship skins** (browse the Hangar). Lifetime stats, best
-  score/wave, unlocks, and settings persist in `profile.json` (atomic writes, survives crashes).
+## Global leaderboards (the microservice)
+
+`server/` is a self-contained FastAPI + SQLite service the desktop game talks to over HTTP
+(fully optional — the game degrades gracefully offline):
+
+- `POST /api/v1/scores` — validated score submission (optional `X-Api-Key`)
+- `GET /api/v1/scores?game=&mode=` — top N as JSON (CORS-enabled for your website)
+- `GET /scoreboard?game=&mode=` — **self-contained retro HTML scoreboard**, made to be
+  iframed into a family website: `<iframe src="http://your-box:8000/scoreboard?game=voxelhell&mode=campaign" width="500" height="640" frameborder="0"></iframe>`
+- `GET /api/v1/daily` — deterministic daily seed (future daily-challenge mode)
+- `GET /healthz` — container healthcheck
+
+### Deploy on the Ubuntu box
+
+CI (GitHub Actions) tests and publishes the image to GHCR on every `server/**` change; the
+package inherits this repo's **private** visibility. One-time on the box:
+
+```bash
+# PAT needs read:packages
+echo $GITHUB_PAT | docker login ghcr.io -u <your-github-user> --password-stdin
+```
+
+Then, with [docker-compose.yml](docker-compose.yml) copied over (or the repo cloned):
+
+```bash
+docker compose pull && docker compose up -d     # or: docker compose up -d --build
+curl http://localhost:8000/healthz
+```
+
+Scores live in the `arcade-data` volume. Optional env: `ARCADE_API_KEY` (require a key for
+submissions; set `PIXEL_INVADERS_API_KEY` in the game's environment to match) and
+`ARCADE_CORS_ORIGINS` (lock browser reads to `https://chomey.org`).
+
+### Point the game at it
+
+Set `settings.server_url` in `profile.json` (e.g. `"http://ubuntu-box:8000"`) or the
+`PIXEL_INVADERS_SERVER` env var. The SCORES screen gains a LOCAL/GLOBAL toggle and initials
+submissions upload automatically (with a global-rank toast).
 
 ## How it's built
 
-The simulation is pure 2D logic with zero pygame/GL dependencies — the 3D is presentation only.
+The simulations are pure logic (no pygame/GL) — 3D is presentation only.
 
 ```
-game/    sprites.py (all pixel art as text grids), world.py (bullet-hell sim),
-         patterns.py (composable bullet patterns), waves.py, entities.py,
-         events.py, skins.py
-meta/    profile.py (versioned atomic JSON save), stats.py, achievements.py
-render/  voxel.py (grid -> face-culled cube mesh, GL instancing), particles.py
-         (numpy sim, instanced cubes), post.py (bloom + CRT + shake/aberration),
-         text.py (font-texture HUD), gl.py, renderer.py
-tools/   gen_art.py (bakes PNGs + contact sheet from the grids),
-         gen_sound.py (synthesizes every sfx + two music loops, stdlib-only),
-         test_world.py / test_meta.py / smoke_test.py / test_render.py
-main.py  app state machine: menu, hangar, achievements, stats, gameplay
+arcade/    game_api.py — the cabinet<->game contract
+games/     voxelhell/ breaker/ serpent/ — world sim, drawing, HUD,
+           achievements, demo bot per game; __init__.py registry
+game/      shared engine: sprites (pixel grids), entities, events,
+           audio bank, net client
+meta/      profile (versioned atomic JSON, v1->v2 migration), stats,
+           achievements engine, local leaderboards
+render/    generic voxel scene engine: instanced meshes, numpy particles,
+           bloom + CRT + letterboxed composite, font-texture overlay
+server/    FastAPI microservice: own requirements, tests, Dockerfile
+main.py    cabinet shell: carousel menu, attract, initials, screens
+tools/     asset generators + five test suites
 ```
 
-Rendering: each entity is drawn by instancing its voxel mesh (12 floats per instance:
-position/scale/quaternion/tint); bullets and thousands of particles ride the same path, so the
-whole scene is a handful of draw calls. Scene renders to a float FBO where emissive tints
-exceed 1.0, gets a bright-pass + separable gaussian bloom at half res, then a CRT composite
-(scanlines, vignette, barrel distortion, chromatic aberration pulses on hits).
+## Tests (all headless)
 
-![sprites](docs/sprites.png)
-
-## Tests
-
-All headless — the sim runs without a window and the renderer runs against a hidden GL context:
-
-```powershell
-.venv\Scripts\python tools\test_world.py    # bot plays the full campaign; determinism; loss path
-.venv\Scripts\python tools\test_meta.py     # achievements/stats/profile round-trip
-.venv\Scripts\python tools\smoke_test.py    # boots the real app, drives every screen
-.venv\Scripts\python tools\test_render.py   # offscreen render, writes screenshots
+```bash
+python tools/test_world.py        # Voxel Hell: campaign loops, endless, determinism
+python tools/test_games.py        # Breaker + Serpent sims, bots, determinism
+python tools/test_meta.py         # stats/achievements/skins, profile migration
+python tools/smoke_test.py        # boots the real cabinet, plays every game
+python server/test_server.py      # API tests (needs: pip install httpx)
+python tools/test_integration.py  # real uvicorn server + the game's net client
 ```
 
 Regenerate assets after editing sprite grids or sound definitions:
-
-```powershell
-.venv\Scripts\python tools\gen_art.py
-.venv\Scripts\python tools\gen_sound.py
-```
+`python tools/gen_art.py && python tools/gen_sound.py`
 
 > **Why pygame-ce?** Plain `pygame` doesn't publish wheels for very new Python releases;
 > `pygame-ce` is the API-compatible community fork that does (`import pygame` still works).
 
-This is a demo/experiment repo, not a production project.
+Demo/experiment repo. macOS is written-for but untested — file an issue at me.
