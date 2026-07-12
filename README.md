@@ -7,8 +7,12 @@ Dockerized backend microservice for the global scores. Demo/experiment that got 
 out of hand.
 
 Everything is generated from code — the pixel grids in [game/sprites.py](game/sprites.py)
-become voxel meshes at runtime, and every sound effect and chiptune loop is synthesized by
-[tools/gen_sound.py](tools/gen_sound.py) with only the Python stdlib.
+become voxel meshes at runtime, and every sound effect and all music is synthesized by
+[tools/gen_sound.py](tools/gen_sound.py) with only the Python stdlib. The soundtrack isn't
+a loop: a seeded procedural composer bakes a bank of interlocking chiptune sections (varied
+progressions, melodies, bass styles, drum patterns, intensity tiers) and the game chains
+them gaplessly in shuffled order — with a separate high-tension pool that takes over during
+boss fights.
 
 | | |
 |---|---|

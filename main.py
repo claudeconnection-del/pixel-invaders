@@ -13,7 +13,7 @@ import sys
 import pygame
 
 from game import events as ev
-from game.assets import AudioBank
+from game.assets import AudioBank, MUSIC_END_EVENT
 from game.entities import InputState
 from game.netclient import ArcadeClient
 from games import load_games, GAME_IDS
@@ -348,7 +348,10 @@ class App:
         elif self.state == PAUSED:
             if key == pygame.K_ESCAPE:
                 self.state = PLAYING
-                self.audio.music("game")
+                boss = getattr(self.run.world, "boss", None)
+                fighting_boss = (boss is not None and boss.alive
+                                 and not self.run.run_over)
+                self.audio.music("boss" if fighting_boss else "game")
             elif key == pygame.K_q:
                 self.abandon_run()
 
@@ -598,7 +601,11 @@ class App:
 
         for etype, data in frame_events:
             run.on_event(etype, data, self.renderer, self.audio, self.post_banner)
-            if etype == ev.RUN_END:
+            if etype == ev.BOSS_SPAWN:
+                self.audio.music("boss")
+            elif etype == ev.BOSS_KILLED:
+                self.audio.music("game")
+            elif etype == ev.RUN_END:
                 self.run_summary = data["summary"]
                 self.run_won = data["win"]
 
@@ -989,6 +996,8 @@ class App:
                     self.joysticks[stick.get_instance_id()] = stick
                 elif event.type == pygame.JOYDEVICEREMOVED:
                     self.joysticks.pop(event.instance_id, None)
+                elif event.type == MUSIC_END_EVENT:
+                    self.audio.on_music_end()
 
             self.poll_pad_navigation(dt)
             self.poll_network()

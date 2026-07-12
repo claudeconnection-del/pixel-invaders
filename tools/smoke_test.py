@@ -69,6 +69,25 @@ def main():
         render_frame()
     print("settings adjustments OK")
 
+    # music sequencer: pools discovered, sections shuffle without repeats
+    for pool, minimum in (("menu", 3), ("game", 6), ("boss", 2)):
+        assert len(app.audio.pools.get(pool, [])) >= minimum, \
+            f"pool {pool} too small: {app.audio.pools.get(pool)}"
+    app.audio.music("game")
+    picks = [app.audio.recent[-1]]
+    for _ in range(12):
+        app.audio.on_music_end()  # simulate sections finishing
+        picks.append(app.audio.recent[-1])
+    assert all(a != b for a, b in zip(picks, picks[1:])), \
+        "sequencer repeated a section back-to-back"
+    assert len(set(picks)) >= 5, f"not enough variety: {sorted(set(picks))}"
+    app.audio.music("boss")
+    app.audio.on_music_end()
+    assert "boss_" in os.path.basename(app.audio.recent[-1])
+    app.audio.music(None)
+    print(f"music sequencer OK ({len(set(picks))} distinct sections over "
+          f"{len(picks)} plays)")
+
     # play every game/mode with its bot through the real app
     bots = {"voxelhell": dodge_bot_input, "breaker": breaker_bot,
             "serpent": serpent_bot}

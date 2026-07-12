@@ -123,12 +123,16 @@ C4, D4, E4, G4, A4, C5, D5, E5, G5 = 60, 62, 64, 67, 69, 72, 74, 76, 79
 REST = None
 
 
-def note_track(seq, note_dur, amplitude, duty=0.5, decay_power=2.5):
+def note_track(seq, note_dur, amplitude, duty=0.5, decay_power=2.5,
+               triangle=False):
     """seq: list of midi numbers (or REST); every note lasts note_dur sec."""
     out = []
     for m in seq:
         if m is REST:
             out.extend([0.0] * int(SAMPLE_RATE * note_dur))
+        elif triangle:
+            out.extend(decay(triangle_wave(midi(m), note_dur, amplitude),
+                             decay_power))
         else:
             out.extend(decay(square_wave(midi(m), note_dur, amplitude, duty),
                              decay_power))
@@ -152,55 +156,185 @@ def drum_track(pattern, note_dur, kick_amp=0.30, hat_amp=0.05, snare_amp=0.16):
     return out
 
 
-def build_game_music():
-    """Driving 8-bar loop at 150 BPM in A minor."""
-    eighth = 60 / 150 / 2  # 0.2s
+# ------------------------------------------------ procedural music sections
+# Everything is in A minor at a fixed tempo per pool so any section can
+# follow any other; the runtime sequencer (game/assets.py) shuffles them.
+# Composition is seeded, so bakes are reproducible.
 
-    # chord roots per bar: Am Am F F C C G G
-    bass_roots = [A2, A2, F2, F2, C3, C3, G2, G2]
-    bass = []
-    for root in bass_roots:
-        bass += [root, root + 12, root, root + 12, root, root + 12, root, root + 12]
+import random as _random
 
-    lead = [
-        # bar 1-2 (Am)
-        A4, REST, C5, A4, E5, REST, C5, A4,
-        G4, A4, C5, REST, D5, C5, A4, G4,
-        # bar 3-4 (F)
-        F3 + 12, REST, A4, C5, A4, REST, C5, D5,
-        C5, A4, G4, REST, A4, G4, E4, D4,
-        # bar 5-6 (C)
-        E4, G4, C5, REST, E5, D5, C5, REST,
-        G4, C5, E5, REST, D5, C5, G4, E4,
-        # bar 7-8 (G)
-        D4, G4, D5, REST, G5, REST, D5, C5,
-        D5, REST, G4, A4, C5, D5, E5, REST,
+MUSIC_SEED = 20260711
+GAME_BPM = 150
+MENU_BPM = 90
+
+# progressions as semitone offsets from A; chords as (offset, is_minor)
+PROGRESSIONS = [
+    [(0, True), (0, True), (-4, False), (-4, False),
+     (3, False), (3, False), (-2, False), (-2, False)],   # Am Am F F C C G G
+    [(0, True), (-2, False), (-4, False), (-2, False)] * 2,  # Am G F G
+    [(0, True), (0, True), (5, True), (3, False),
+     (-4, False), (-4, False), (-2, False), (-2, False)],  # Am Am Dm C F F G G
+    [(-4, False), (-2, False), (0, True), (0, True)] * 2,    # F G Am Am
+]
+
+BOSS_PROGRESSIONS = [
+    [(0, True), (0, True), (-1, False), (-1, False)] * 2,    # Am Am Ab(!) tension
+    [(0, True), (5, True), (0, True), (-2, False)] * 2,      # Am Dm Am G
+]
+
+A_MINOR = [0, 2, 3, 5, 7, 8, 10]  # natural minor semitone degrees
+
+BASS_STYLES = {
+    "octave": lambda r: [r, r + 12, r, r + 12, r, r + 12, r, r + 12],
+    "pulse": lambda r: [r] * 8,
+    "fifth": lambda r: [r, r, r + 7, r, r + 12, r, r + 7, r],
+    "climb": lambda r: [r, r, r + 3, r + 3, r + 7, r + 7, r + 12, r + 7],
+}
+
+DRUM_STYLES = {
+    "basic": "K.h.S.h.",
+    "drive": "K.hhS.hh",
+    "sparse": "K...S...",
+    "intense": "KKh.S.hK",
+}
+DRUM_FILLS = ["K.h.S.SS", "K.SSS.SS", "K.h.SKSK"]
+
+
+def chord_tones(root_offset, is_minor, base=57):  # base A3
+    third = 3 if is_minor else 4
+    return [base + root_offset, base + root_offset + third,
+            base + root_offset + 7]
+
+
+def gen_melody(rng, progression, bars, rest_prob=0.18):
+    """Seeded random walk over A minor, snapping to chord tones on
+    downbeats. 8 eighth-notes per bar."""
+    seq = []
+    cur = 69  # A4
+    for bar in range(bars):
+        root, is_minor = progression[bar % len(progression)]
+        tones = chord_tones(root, is_minor, base=69 + (root < -3) * 12)
+        for step in range(8):
+            if rng.random() < rest_prob and step % 4 != 0:
+                seq.append(REST)
+                continue
+            if step % 4 == 0:
+                cur = rng.choice(tones)
+            else:
+                move = rng.choice([-2, -1, -1, 1, 1, 2, 3, -3])
+                degree = min(range(len(A_MINOR)),
+                             key=lambda i: abs((cur % 12) - A_MINOR[i]))
+                octave = cur // 12
+                degree += move
+                octave += degree // len(A_MINOR)
+                degree %= len(A_MINOR)
+                cur = octave * 12 + A_MINOR[degree]
+            cur = max(60, min(84, cur))  # C4..C6
+            # occasional octave stab for spice
+            if rng.random() < 0.06:
+                cur = max(60, min(84, cur + rng.choice([-12, 12])))
+            seq.append(cur)
+    return seq
+
+
+def gen_bass(rng, progression, bars, style_name):
+    style = BASS_STYLES[style_name]
+    seq = []
+    for bar in range(bars):
+        root, _ = progression[bar % len(progression)]
+        seq += style(45 + root)  # around A2
+    return seq
+
+
+def gen_drums(rng, bars, style_name, fill_every=4):
+    base = DRUM_STYLES[style_name]
+    out = ""
+    for bar in range(bars):
+        if fill_every and (bar + 1) % fill_every == 0:
+            out += rng.choice(DRUM_FILLS)
+        else:
+            out += base
+    return out
+
+
+def build_game_section(rng, intensity, bars=8):
+    """One 8-bar section; intensity 0 (calm) / 1 (mid) / 2 (full)."""
+    eighth = 60 / GAME_BPM / 2
+    progression = rng.choice(PROGRESSIONS)
+    bass_style = rng.choice(["octave", "fifth", "climb"])
+    layers = []
+
+    layers.append(note_track(gen_bass(rng, progression, bars, bass_style),
+                             eighth, 0.16, duty=0.25, decay_power=1.5))
+    melody = gen_melody(rng, progression, bars,
+                        rest_prob=0.3 - 0.06 * intensity)
+    if intensity == 0:
+        layers.append(note_track(melody, eighth, 0.12, decay_power=1.6,
+                                 triangle=True))
+        layers.append(drum_track(gen_drums(rng, bars, "sparse", fill_every=0),
+                                 eighth, hat_amp=0.03))
+    elif intensity == 1:
+        layers.append(note_track(melody, eighth, 0.13, duty=0.5,
+                                 decay_power=2.2))
+        layers.append(drum_track(gen_drums(rng, bars, "basic"), eighth))
+    else:
+        layers.append(note_track(melody, eighth, 0.13, duty=0.5,
+                                 decay_power=2.2))
+        # shimmer: melody echoed an octave up, thinner voice
+        layers.append(note_track([m + 12 if m else REST for m in melody],
+                                 eighth, 0.04, duty=0.125, decay_power=1.2))
+        layers.append(drum_track(gen_drums(rng, bars, "drive"), eighth))
+    return envelope(mix(*layers), attack=0.002, release=0.002)
+
+
+def build_boss_section(rng, bars=8):
+    eighth = 60 / GAME_BPM / 2
+    progression = rng.choice(BOSS_PROGRESSIONS)
+    melody = gen_melody(rng, progression, bars, rest_prob=0.12)
+    layers = [
+        note_track(gen_bass(rng, progression, bars, "pulse"), eighth, 0.19,
+                   duty=0.25, decay_power=1.2),
+        note_track(melody, eighth, 0.13, duty=0.5, decay_power=2.4),
+        note_track([m - 12 if m else REST for m in melody], eighth, 0.05,
+                   duty=0.25, decay_power=1.5),
+        drum_track(gen_drums(rng, bars, "intense", fill_every=2), eighth,
+                   kick_amp=0.34, snare_amp=0.2),
     ]
-
-    drums = ("K.h.S.h." * 8)
-
-    track = mix(
-        note_track(bass, eighth, 0.16, duty=0.25, decay_power=1.5),
-        note_track(lead, eighth, 0.13, duty=0.5, decay_power=2.2),
-        drum_track(drums, eighth),
-    )
-    return envelope(track, attack=0.002, release=0.002)
+    return envelope(mix(*layers), attack=0.002, release=0.002)
 
 
-def build_menu_music():
-    """Calm 4-bar arpeggio loop at 90 BPM."""
-    eighth = 60 / 90 / 2  # 0.333s
-    arps = [
-        [A2, E3, A3, C4, E4, C4, A3, E3],   # Am
-        [F2, C3, F3, A3, C4, A3, F3, C3],   # F
-        [C3, G3, C4, E4, G4, E4, C4, G3],   # C
-        [G2, D4 - 12, G3, C4 - 1, D4, C4 - 1, G3, D4 - 12],  # G (B as C4-1)
-    ]
-    seq = [n for bar in arps for n in bar]
-    pad = note_track(seq, eighth, 0.11, duty=0.5, decay_power=1.2)
-    shimmer = note_track(
-        [m + 12 if m else REST for m in seq], eighth, 0.035, duty=0.3, decay_power=1.0)
+def build_menu_section(rng, bars=4):
+    eighth = 60 / MENU_BPM / 2
+    progression = rng.choice(PROGRESSIONS)
+    seq = []
+    for bar in range(bars * 2):  # arps read the progression at double rate
+        root, is_minor = progression[bar % len(progression)]
+        tones = chord_tones(root, is_minor, base=45)
+        pattern = rng.choice([
+            [0, 1, 2, "8", 2, 1],
+            [0, 2, 1, 2, "8", 2],
+            [0, 1, "8", 1, 2, 1],
+        ])
+        for p in pattern[:4]:
+            seq.append(tones[0] + 12 if p == "8" else tones[p])
+    pad = note_track(seq, eighth, 0.11, decay_power=1.2, triangle=True)
+    shimmer = note_track([m + 24 for m in seq], eighth, 0.028, duty=0.3,
+                         decay_power=1.0)
     return envelope(mix(pad, shimmer), attack=0.002, release=0.002)
+
+
+def build_music_bank():
+    """Bake the section pools the runtime sequencer shuffles through."""
+    rng = _random.Random(MUSIC_SEED)
+    sections = {}
+    intensities = [0, 1, 1, 2, 1, 2, 2, 0]  # varied moods across the pool
+    for i, intensity in enumerate(intensities):
+        sections[f"game_{i:02d}.wav"] = build_game_section(rng, intensity)
+    for i in range(3):
+        sections[f"boss_{i:02d}.wav"] = build_boss_section(rng)
+    for i in range(4):
+        sections[f"menu_{i:02d}.wav"] = build_menu_section(rng)
+    return sections
 
 
 # ------------------------------------------------------------------ main
@@ -257,8 +391,8 @@ def main():
     for name, samples in sfx.items():
         write_wav(SFX_DIR, name, samples)
 
-    write_wav(MUSIC_DIR, "game_loop.wav", build_game_music())
-    write_wav(MUSIC_DIR, "menu_loop.wav", build_menu_music())
+    for filename, samples in build_music_bank().items():
+        write_wav(MUSIC_DIR, filename, samples)
 
 
 if __name__ == "__main__":
