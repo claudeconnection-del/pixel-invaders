@@ -39,6 +39,10 @@ class ArcadeClient:
                 with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
                     payload = json.loads(resp.read().decode())
                 self.results.put((tag, payload))
+            except urllib.error.HTTPError as e:
+                # reachable but rejected: callers can distinguish this from
+                # being offline (e.g. the outbox drops 4xx, keeps offline)
+                self.results.put((tag, {"__status__": e.code}))
             except (urllib.error.URLError, OSError, ValueError):
                 self.results.put((tag, None))
 
@@ -54,10 +58,10 @@ class ArcadeClient:
                 return out
 
     # ------------------------------------------------------------- calls
-    def submit_score(self, game, mode, name, score, wave=None):
+    def submit_score(self, game, mode, name, score, wave=None, tag="submit"):
         if not self.available:
             return
-        self._request("submit", "POST", "/api/v1/scores", {
+        self._request(tag, "POST", "/api/v1/scores", {
             "game": game, "mode": mode, "name": name,
             "score": score, "wave": wave,
         })
@@ -81,10 +85,11 @@ class ArcadeClient:
         self._request("session_join", "POST",
                       f"/api/v1/sessions/{code}/join", {"name": name})
 
-    def submit_session_score(self, code, name, score, wave=None):
+    def submit_session_score(self, code, name, score, wave=None,
+                             tag="session_score"):
         if not self.available:
             return
-        self._request("session_score", "POST",
+        self._request(tag, "POST",
                       f"/api/v1/sessions/{code}/scores",
                       {"name": name, "score": score, "wave": wave})
 

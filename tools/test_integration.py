@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import json
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -126,6 +127,32 @@ def main():
         results = drain(dead, 2, timeout_s=12)
         assert len(results) == 2 and all(p is None for _, p in results)
         print("offline degradation OK")
+
+        # outbox: scores queued while offline deliver on next contact;
+        # definitively-rejected items (bad session) get dropped
+        from meta.outbox import Outbox
+        profile = {"outbox": []}
+        ranks = []
+        offline_net = ArcadeClient("http://127.0.0.1:1")
+        box = Outbox(profile, offline_net, on_rank=ranks.append)
+        box.queue_score("voxelhell", "campaign", "OFF", 9999, wave=4)
+        box.queue_session_score("ZZZZ", "OFF", 123)  # will 404 once online
+        for tag, payload in drain(offline_net, 2, timeout_s=12):
+            box.handle_result(tag, payload)
+        assert len(profile["outbox"]) == 2, "offline items must stay queued"
+
+        box.net = ArcadeClient(BASE)  # back on the home network
+        box.inflight.clear()
+        box.drain()
+        for tag, payload in drain(box.net, 2):
+            box.handle_result(tag, payload)
+        assert profile["outbox"] == [], f"outbox not drained: {profile['outbox']}"
+        assert ranks and ranks[0] >= 1, "rank toast never fired"
+        with urllib.request.urlopen(
+                f"{BASE}/api/v1/scores?game=voxelhell&mode=campaign") as r:
+            names = [s["name"] for s in json.loads(r.read())["scores"]]
+        assert "OFF" in names, "queued score never reached the board"
+        print("offline outbox OK (deferred delivery + 4xx drop)")
     finally:
         server.terminate()
         server.wait(timeout=10)

@@ -35,6 +35,7 @@ DEFAULT_PROFILE = {
     "selected_game": "voxelhell",
     "games": {},  # game_id -> GAME_SECTION_DEFAULT copy, created on demand
     "leaderboard": {},  # "game:mode" -> [{name, score, wave, date}] top 10
+    "outbox": [],  # queued score submissions awaiting server contact
     "settings": {
         "crt": True,
         "music": True,

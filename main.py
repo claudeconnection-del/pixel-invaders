@@ -21,6 +21,7 @@ from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
 from meta import leaderboard as lb
 from meta import profile as profile_mod
 from meta.achievements import AchievementEngine
+from meta.outbox import Outbox
 from meta.stats import StatsTracker
 
 WIDTH, HEIGHT = 1280, 860
@@ -152,6 +153,14 @@ class App:
         self.net = ArcadeClient(self.profile["settings"].get("server_url", ""))
         self.board_scope = "local"        # local | global
         self.global_boards = {}           # (game, mode) -> list | "pending" | None
+
+        # offline score outbox: queued submissions retried on next contact
+        self.outbox = Outbox(
+            self.profile, self.net,
+            on_rank=lambda rank: (self.post_banner(f"GLOBAL RANK #{rank}", 3.0),
+                                  self.audio.play("toast")),
+            save_cb=self.save_profile)
+        self.outbox_timer = 5.0  # first drain shortly after boot
 
         # multiplayer session state
         self.mp = None            # {code, seed, game, mode, players, name}
@@ -567,7 +576,8 @@ class App:
         name = "".join(self.initials).strip() or "AAA"
         self.profile["settings"]["player_name"] = "".join(self.initials)
         self.last_rank = lb.submit(self.profile, game_id, mode, name, score, extra)
-        self.net.submit_score(game_id, mode, name, score, extra.get("wave"))
+        # global submission goes through the outbox: survives being offline
+        self.outbox.queue_score(game_id, mode, name, score, extra.get("wave"))
         self.pending_board = None
         self.board_scope = "local"
         self.board_mode_index = next(
@@ -586,7 +596,9 @@ class App:
 
     def poll_network(self):
         for tag, payload in self.net.poll():
-            if isinstance(tag, tuple) and tag[0] == "scores":
+            if isinstance(tag, tuple) and tag[0] == "outbox":
+                self.outbox.handle_result(tag, payload)
+            elif isinstance(tag, tuple) and tag[0] == "scores":
                 key = (tag[1], tag[2])
                 if payload is None:
                     self.global_boards[key] = "error"
@@ -806,8 +818,9 @@ class App:
             self.audio.music(None)
             score = self.run_summary["score"]
             if self.mp is not None:
-                # session runs report to the lobby, not the initials flow
-                self.net.submit_session_score(
+                # session runs report to the lobby, not the initials flow;
+                # queued so a dropped connection still lands the score
+                self.outbox.queue_session_score(
                     self.mp["code"], self.mp["name"], score,
                     self.run_summary.get("wave_reached"))
             elif lb.qualifies(self.profile, self.game_id, self.run_mode, score):
@@ -1288,6 +1301,10 @@ class App:
 
             self.poll_pad_navigation(dt)
             self.poll_network()
+            self.outbox_timer -= dt
+            if self.outbox_timer <= 0:
+                self.outbox_timer = 60.0
+                self.outbox.drain()
             if self.state == LOBBY and self.mp is not None:
                 self.mp_poll_timer -= dt
                 if self.mp_poll_timer <= 0:
