@@ -66,6 +66,7 @@ SETTINGS_ROWS = [
     ("Bloom", "bloom", ["off", "low", "full"]),
     ("Particles", "particles", ["low", "medium", "high"]),
     ("CRT filter", "crt", [True, False]),
+    ("Look sensitivity", "mouse_sens", [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5]),
     ("Game music", "game_music", ["classic", "custom"]),
     ("Music volume", "music_vol", "float"),
     ("SFX volume", "sfx_vol", "float"),
@@ -800,7 +801,8 @@ class App:
         # relative mouse motion, consumed every frame; only applied by
         # mouse-look games (grab is on for those)
         rel_dx = pygame.mouse.get_rel()[0]
-        look_dx = rel_dx if self.game.INFO.mouse_look else 0.0
+        sens = self.profile["settings"].get("mouse_sens", 1.0)
+        look_dx = rel_dx * sens if self.game.INFO.mouse_look else 0.0
 
         strafe = ((1 if keys[pygame.K_d] else 0)
                   - (1 if keys[pygame.K_a] else 0))
