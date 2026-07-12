@@ -59,7 +59,7 @@ jobs:
           docker compose pull
           docker compose up -d
       - name: Smoke test the live deployment
-        run: python3 server/deploy_smoke.py http://localhost:8000
+        run: python3 server/deploy_smoke.py http://localhost:8083
       - name: Prune old images
         if: success()
         run: docker image prune -f
