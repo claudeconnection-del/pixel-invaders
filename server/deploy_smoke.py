@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 
-BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000").rstrip("/")
+BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8083").rstrip("/")
 HEALTH_TRIES = 30
 HEALTH_WAIT_S = 2
 
