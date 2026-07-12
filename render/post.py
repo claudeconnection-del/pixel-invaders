@@ -63,7 +63,7 @@ void main() {
     vec2 uv = v_uv;
     if (u_crt > 0.5) uv = barrel(uv, 0.045);
 
-    float ab = 0.0015 + u_aberration * 0.006;
+    float ab = 0.0007 + u_aberration * 0.006;
     vec3 scene;
     scene.r = texture(u_scene, uv + vec2(ab, 0.0)).r;
     scene.g = texture(u_scene, uv).g;
@@ -88,13 +88,10 @@ void main() {
 
 
 class PostPipeline:
-    def __init__(self, width, height, out_width=None, out_height=None):
-        # width/height: internal render resolution (scene FBO + HUD space).
-        # out_*: actual window size; composite letterboxes into it.
+    def __init__(self, width, height):
+        # scene renders at the window's native resolution/aspect
         self.width = width
         self.height = height
-        self.out_width = out_width or width
-        self.out_height = out_height or height
         self.bloom_iterations = 2  # graphics setting: 0=off, 1=low, 2=full
         self.scene = FBO(width, height, depth=True)
         half_w, half_h = max(1, width // 2), max(1, height // 2)
@@ -131,12 +128,6 @@ class PostPipeline:
         glClearColor(0.028, 0.028, 0.055, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-    def letterbox(self):
-        """Aspect-fit viewport rect (x, y, w, h) inside the output window."""
-        scale = min(self.out_width / self.width, self.out_height / self.height)
-        vw, vh = int(self.width * scale), int(self.height * scale)
-        return (self.out_width - vw) // 2, (self.out_height - vh) // 2, vw, vh
-
     def finish(self, time_s, aberration=0.0, crt=True):
         glDisable(GL_DEPTH_TEST)
         glDisable(GL_BLEND)
@@ -165,12 +156,9 @@ class PostPipeline:
                 self.tri.draw()
             bloom_tex = self.bright.tex
 
-        # composite to default framebuffer, letterboxed to the window
+        # composite to the default framebuffer at native size
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        glViewport(0, 0, self.out_width, self.out_height)
-        glClearColor(0.0, 0.0, 0.0, 1.0)
-        glClear(GL_COLOR_BUFFER_BIT)
-        glViewport(*self.letterbox())
+        glViewport(0, 0, self.width, self.height)
         glUseProgram(self.p_comp)
         glUniform1i(self.u_comp_scene, 0)
         glUniform1i(self.u_comp_bloom, 1)

@@ -47,16 +47,18 @@ class Batcher:
 
 
 class Renderer:
-    def __init__(self, width, height, out_width=None, out_height=None, rng=None):
-        # width/height: internal render resolution (fixed HUD space);
-        # out_*: window size, letterboxed by the post pass.
-        self.width = width
-        self.height = height
+    """Native-aspect renderer: the 3D scene renders at the window's real
+    resolution/aspect (no letterboxing — ultrawides see more space, the
+    playfield always fits). UI positions use logical coordinates with a
+    fixed height of UI_H and width following the aspect; fonts rasterize
+    at device resolution so text is crisp on any panel."""
+
+    UI_H = 860.0
+
+    def __init__(self, width, height, rng=None):
         self.rng = rng or random.Random()
 
         self.shader = VoxelShader()
-        self.post = PostPipeline(width, height, out_width, out_height)
-        self.overlay = OverlayRenderer(width, height)
         self.particles = ParticleSystem(self.rng)
 
         self.meshes = {name: VoxelMesh(grid, PALETTE)
@@ -64,7 +66,9 @@ class Renderer:
         self.cube = VoxelMesh(["W"], PALETTE)  # single voxel for particles/stars
         self.meshes["cube"] = self.cube       # games may batch plain cubes
 
-        self.proj = perspective(52.0, width / height, 0.1, 100.0)
+        self.post = None
+        self.overlay = None
+        self._apply_size(width, height)
 
         # effects state
         self.shake = 0.0
@@ -76,10 +80,10 @@ class Renderer:
         self.camera_override = None
         self._last_viewproj = None
 
-        # starfield
-        n = 520
+        # starfield — spans wide enough to fill a 32:9 frustum's sides
+        n = 1100
         self.star_pos = np.empty((n, 3), dtype=np.float32)
-        self.star_pos[:, 0] = np.random.uniform(-16, 16, n)
+        self.star_pos[:, 0] = np.random.uniform(-46, 46, n)
         self.star_pos[:, 1] = np.random.uniform(-14, 14, n)
         self.star_pos[:, 2] = np.random.uniform(-30, -6, n)
         self.star_speed = np.random.uniform(0.4, 1.8, n).astype(np.float32)
@@ -98,6 +102,27 @@ class Renderer:
                 x, y, z = world_from_field(fx, fy)
                 studs.append((x, y, z, 0.055, 0, 0, 0, 1, 0.25, 0.75, 0.85, 0.5))
         self.wall_instances = np.asarray(studs, dtype=np.float32)
+
+    def _apply_size(self, width, height):
+        """Size-dependent state; called at init and on window resize."""
+        self.width = width
+        self.height = height
+        self.ui_h = self.UI_H
+        self.ui_w = self.UI_H * width / height
+        self.ui_scale = height / self.UI_H
+        if self.overlay is not None:
+            self.overlay.dispose()
+        self.post = PostPipeline(width, height)
+        self.overlay = OverlayRenderer(self.ui_w, self.ui_h, self.ui_scale)
+        # vertical fov 52 frames the 640x720 field on wide screens; near-
+        # square/tall windows need a wider fov so the arena's width still fits
+        aspect = width / height
+        fov = max(52.0, 2 * math.degrees(math.atan(11.0 / (25.7 * max(aspect, 0.2)))))
+        self.proj = perspective(fov, aspect, 0.1, 100.0)
+
+    def resize(self, width, height):
+        if (width, height) != (self.width, self.height):
+            self._apply_size(width, height)
 
     # ----------------------------------------------------------- settings
     def apply_quality(self, bloom="full", particles="high"):
@@ -156,9 +181,9 @@ class Renderer:
         return vp
 
     def project_to_screen(self, x, y, z):
-        """World position -> (screen_x, screen_y, depth) in logical render
-        coords, or None if behind the camera. Uses the last drawn frame's
-        camera — call after draw_scene()."""
+        """World position -> (x, y, depth) in logical UI coords (matching
+        InputState.aim), or None if behind the camera. Uses the last drawn
+        frame's camera — call after draw_scene()."""
         vp = self._last_viewproj
         if vp is None:
             return None
@@ -166,8 +191,8 @@ class Renderer:
         if v[3] <= 0.001:
             return None
         ndc = v[:3] / v[3]
-        sx = (ndc[0] * 0.5 + 0.5) * self.width
-        sy = (1.0 - (ndc[1] * 0.5 + 0.5)) * self.height
+        sx = (ndc[0] * 0.5 + 0.5) * self.ui_w
+        sy = (1.0 - (ndc[1] * 0.5 + 0.5)) * self.ui_h
         return sx, sy, ndc[2]
 
     def _star_instances(self):
@@ -222,7 +247,14 @@ class Renderer:
 
     # ------------------------------------------------------------ overlay
     def begin_overlay(self):
+        """Start the HUD/text pass. Called AFTER finish(): the overlay draws
+        straight into the window, post-CRT, so text stays pixel-crisp no
+        matter what the filter does to the 3D scene."""
         glDisable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        from OpenGL.GL import glViewport
+        glViewport(0, 0, self.width, self.height)
         self.overlay.begin()
 
     def finish(self, crt=True):

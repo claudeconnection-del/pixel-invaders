@@ -43,13 +43,17 @@ void main() {
 
 
 class OverlayRenderer:
-    """Draws text strings and solid rects in screen space. Textures cached
-    per (text, size); call begin() once per frame before drawing."""
+    """Draws text strings and solid rects in logical screen space (fixed
+    height, width follows the window aspect). Fonts rasterize at device
+    resolution (logical size x scale) so text is crisp on any panel.
+    Textures cached per (text, size); call begin() once per frame."""
 
     MAX_CACHE = 384
 
-    def __init__(self, screen_w, screen_h):
+    def __init__(self, screen_w, screen_h, scale=1.0):
         self.screen = (screen_w, screen_h)
+        self.scale = max(0.5, scale)
+        self.offset_x = 0.0  # shifts all draws (centered HUD bands)
         self.program = compile_program(QUAD_VS, QUAD_FS)
         self.u_screen = glGetUniformLocation(self.program, "u_screen")
         self.u_tint = glGetUniformLocation(self.program, "u_tint")
@@ -67,9 +71,14 @@ class OverlayRenderer:
         self.fonts = {}
         self.cache = {}  # (text, size) -> (tex, w, h)
 
+    # Chunkier, better-hinted monospaces first; courier as last resort.
+    FONT_STACK = "consolas,menlo,dejavusansmono,liberationmono,couriernew"
+
     def _font(self, size):
+        # rasterize at device resolution; quads draw at logical size
         if size not in self.fonts:
-            self.fonts[size] = pygame.font.SysFont("couriernew", size, bold=True)
+            self.fonts[size] = pygame.font.SysFont(
+                self.FONT_STACK, max(8, int(size * self.scale)), bold=True)
         return self.fonts[size]
 
     def _texture_for(self, text, size):
@@ -87,12 +96,21 @@ class OverlayRenderer:
         glBindTexture(GL_TEXTURE_2D, tex)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA,
                      GL_UNSIGNED_BYTE, data)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        # linear: the texture is device-res, drawn at 1:1 or near it
+        from OpenGL.GL import GL_LINEAR
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        self.cache[key] = (tex, w, h)
+        # store logical dimensions for layout
+        self.cache[key] = (tex, w / self.scale, h / self.scale)
         return self.cache[key]
+
+    def dispose(self):
+        """Free cached textures (window resize rebuilds the overlay)."""
+        for tex, _, _ in self.cache.values():
+            glDeleteTextures([tex])
+        self.cache.clear()
 
     def begin(self):
         glUseProgram(self.program)
@@ -100,6 +118,7 @@ class OverlayRenderer:
         glUniform1i(self.u_tex, 0)
 
     def _draw_quad(self, x, y, w, h):
+        x += self.offset_x
         verts = np.asarray([
             x, y, 0, 0,
             x + w, y, 1, 0,
@@ -114,16 +133,22 @@ class OverlayRenderer:
         glDrawArrays(GL_TRIANGLES, 0, 6)
         glBindVertexArray(0)
 
-    def text(self, s, x, y, size=18, color=(255, 255, 255, 255), center=False):
+    def text(self, s, x, y, size=18, color=(255, 255, 255, 255), center=False,
+             shadow=True):
         if not s:
             return 0
         tex, w, h = self._texture_for(s, size)
         if center:
             x -= w / 2
+        alpha = (color[3] if len(color) > 3 else 255) / 255
         glBindTexture(GL_TEXTURE_2D, tex)
         glUniform1i(self.u_use_tex, 1)
+        if shadow:
+            off = max(1, size // 12)
+            glUniform4f(self.u_tint, 0.0, 0.0, 0.0, 0.8 * alpha)
+            self._draw_quad(x + off, y + off, w, h)
         glUniform4f(self.u_tint, color[0] / 255, color[1] / 255, color[2] / 255,
-                    (color[3] if len(color) > 3 else 255) / 255)
+                    alpha)
         self._draw_quad(x, y, w, h)
         return w
 

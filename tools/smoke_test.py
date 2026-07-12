@@ -39,8 +39,8 @@ def main():
         app.update_timers(dt)
         app.renderer.begin(dt)
         app.draw_3d_layer(dt, 0.0)
-        app.draw_overlay_layer()
-        app.renderer.finish(crt=True)
+        app.renderer.finish(crt=True)  # scene composites first...
+        app.draw_overlay_layer()       # ...then crisp post-CRT overlay
         pygame.display.flip()
 
     # every cabinet screen for every game

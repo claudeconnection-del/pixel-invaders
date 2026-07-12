@@ -64,9 +64,9 @@ def main():
         run.show_hitbox = True
         renderer.begin(DT)
         run.draw(renderer, SECTION)
-        renderer.begin_overlay()
-        run.draw_hud(renderer.overlay, W, H, SECTION)
         renderer.finish(crt=True)
+        renderer.begin_overlay()
+        run.draw_hud(renderer.overlay, renderer.ui_w, renderer.ui_h, SECTION)
         pygame.display.flip()
 
         if not checkpoints["wave1"] and wave_seen == 0 and world.time > 8:
