@@ -1,8 +1,8 @@
 """Offscreen render test: simulate a battle, draw frames, save screenshots.
 
 Run with: python tools/test_render.py
-Creates a hidden GL window, drives the world with the test bot, renders,
-and writes PNGs to tools/_render_*.png for visual inspection.
+Creates a hidden GL window, drives Voxel Hell with the test bot through the
+cabinet game API, renders, and writes PNGs to tools/_render_*.png.
 """
 import os
 import random
@@ -16,10 +16,12 @@ from OpenGL.GL import (  # noqa: E402
 )
 
 from game import events as ev  # noqa: E402
-from game.world import World  # noqa: E402
+from games.voxelhell.game import create_run  # noqa: E402
 from tools.test_world import dodge_bot_input, DT  # noqa: E402
 
 W, H = 1280, 860
+SECTION = {"selected_skin": "vanguard",
+           "lifetime": {"best_score": 0}}
 
 
 def screenshot(path):
@@ -40,48 +42,36 @@ def main():
     from render.renderer import Renderer  # GL context must exist first
 
     renderer = Renderer(W, H, rng=random.Random(7))
-    world = World(rng=random.Random(1234))
-    world.player.lives = 99
+    run = create_run("campaign", random.Random(1234))
+    run.world.player.lives = 99
+
+    def banner(text, seconds):
+        pass
 
     here = os.path.dirname(__file__)
-    # frame 1: early wave 1; frame 2: deep in a later wave; frame 3: boss
-    checkpoints = {"wave1": False, "wave4": False, "boss": False}
+    checkpoints = {"wave1": False, "boss": False}
     frame = 0
     wave_seen = -1
-    while frame < 60 * 60 * 12 and not world.run_over:
-        world.update(DT, dodge_bot_input(world))
-        for etype, data in world.drain_events():
+    world = run.world
+    while frame < 60 * 60 * 12:
+        bot = dodge_bot_input(world)
+        run.update(DT, bot)
+        for etype, data in run.drain_events():
             if etype == ev.WAVE_START:
                 wave_seen = data["index"]
-            elif etype == ev.ENEMY_KILLED:
-                renderer.explosion(data["kind"], data["x"], data["y"])
-                renderer.add_shake(0.04)
-            elif etype == ev.GRAZE:
-                renderer.particles.spark(data["x"], data["y"])
-            elif etype == ev.BOSS_PHASE:
-                renderer.add_shake(0.3)
-                renderer.add_aberration(0.7)
+            run.on_event(etype, data, renderer, _NullAudio(), banner)
 
-        renderer.show_hitbox = True
+        run.show_hitbox = True
         renderer.begin(DT)
-        renderer.draw_world(world, "vanguard")
+        run.draw(renderer, SECTION)
         renderer.begin_overlay()
-        renderer.overlay.text("SCORE 012345", 24, 16, size=20, color=(140, 255, 170))
-        renderer.overlay.text(f"x{world.multiplier:.1f}", 24, 44, size=20,
-                              color=(250, 220, 90))
-        renderer.overlay.rect(W / 2 - 200, 20, 400, 14, (40, 40, 60, 220))
-        if world.boss:
-            renderer.overlay.rect(W / 2 - 198, 22, 396 * world.boss.hp_frac, 10,
-                                  (230, 60, 60, 255))
+        run.draw_hud(renderer.overlay, W, H, SECTION)
         renderer.finish(crt=True)
         pygame.display.flip()
 
         if not checkpoints["wave1"] and wave_seen == 0 and world.time > 8:
             screenshot(os.path.join(here, "_render_wave1.png"))
             checkpoints["wave1"] = True
-        elif not checkpoints["wave4"] and wave_seen == 3 and len(world.enemy_bullets) > 40:
-            screenshot(os.path.join(here, "_render_wave4.png"))
-            checkpoints["wave4"] = True
         elif not checkpoints["boss"] and world.boss is not None and world.boss.alive \
                 and world.boss.phase >= 2 and len(world.enemy_bullets) > 60:
             screenshot(os.path.join(here, "_render_boss.png"))
@@ -94,6 +84,11 @@ def main():
     if missing:
         print("WARNING: missed checkpoints:", missing)
     print("render test done at frame", frame)
+
+
+class _NullAudio:
+    def play(self, name):
+        pass
 
 
 if __name__ == "__main__":

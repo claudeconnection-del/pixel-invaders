@@ -1,10 +1,9 @@
-"""Scene orchestration: camera, starfield, entity batching, HUD, effects.
+"""Generic voxel scene engine: camera, starfield, instanced sprite batches,
+particles, post-processing, effect state (shake/aberration).
 
-The world simulation knows nothing about any of this; main.py hands the
-world to draw_world() each frame and forwards events to the effect hooks
-(shake/aberration/particle bursts live here).
+Game content lives in games/<id>/; a game builds a Batcher each frame and
+the renderer flushes it. Nothing here knows about any specific game.
 """
-import colorsys
 import math
 import random
 
@@ -14,7 +13,6 @@ from OpenGL.GL import (
     glBlendFunc, glDisable, glEnable,
 )
 
-from game.skins import SKINS
 from game.sprites import ALL_SPRITES, PALETTE
 from render.particles import ParticleSystem
 from render.post import PostPipeline
@@ -24,39 +22,23 @@ from render.voxel import (
     quat_axis_angle, quat_mul, world_from_field,
 )
 
-# per-voxel world scale for each sprite family
-SCALES = {
-    "ship": 0.25,
-    "enemy": 0.25,
-    "boss": 0.30,
-    "bullet_player": 0.22,
-    "bullet_enemy": 0.17,
-    "bullet_orb": 0.17,
-    "bullet_wall": 0.17,
-    "powerup": 0.22,
-}
 
-ENEMY_TINTS = {
-    "squid": (1.0, 1.0, 1.0, 1.0),
-    "crab": (1.0, 1.0, 1.0, 1.0),
-    "octo": (1.0, 1.0, 1.0, 1.0),
-    "elite": (1.15, 1.15, 1.25, 1.0),
-}
+class Batcher:
+    """Per-frame collection of sprite instances in field coordinates."""
 
-EXPLOSION_COLORS = {
-    "squid": [(80, 200, 230), (160, 240, 255), (250, 220, 90)],
-    "crab": [(230, 80, 200), (255, 150, 230), (250, 150, 60)],
-    "octo": [(80, 220, 120), (140, 255, 170), (250, 220, 90)],
-    "elite": [(70, 110, 230), (140, 180, 255), (240, 240, 240)],
-    "boss": [(150, 80, 220), (200, 150, 255), (230, 60, 60), (250, 220, 90)],
-    "player": [(240, 240, 240), (250, 150, 60), (230, 60, 60)],
-}
+    def __init__(self):
+        self.batches = {}   # sprite name -> instance rows
+        self.late_cubes = []  # emissive cubes drawn last (with particles)
 
-POWERUP_SPRITES = {
-    "spread": "powerup_spread",
-    "rapid": "powerup_rapid",
-    "shield": "powerup_shield",
-}
+    def add(self, sprite, fx, fy, scale, quat=IDENTITY_QUAT,
+            tint=(1, 1, 1, 1), z=0.0):
+        x, y, wz = world_from_field(fx, fy, z)
+        self.batches.setdefault(sprite, []).append((x, y, wz, scale, *quat, *tint))
+
+    def add_cube_late(self, fx, fy, scale, quat=IDENTITY_QUAT,
+                      tint=(1, 1, 1, 1), z=0.0):
+        x, y, wz = world_from_field(fx, fy, z)
+        self.late_cubes.append((x, y, wz, scale, *quat, *tint))
 
 
 class Renderer:
@@ -75,6 +57,7 @@ class Renderer:
         self.meshes = {name: VoxelMesh(grid, PALETTE)
                        for name, grid in ALL_SPRITES.items()}
         self.cube = VoxelMesh(["W"], PALETTE)  # single voxel for particles/stars
+        self.meshes["cube"] = self.cube       # games may batch plain cubes
 
         self.proj = perspective(52.0, width / height, 0.1, 100.0)
 
@@ -118,8 +101,8 @@ class Renderer:
     def add_aberration(self, amount):
         self.aberration = min(1.0, self.aberration + amount)
 
-    def explosion(self, kind, x, y, big=False):
-        colors = EXPLOSION_COLORS.get(kind, EXPLOSION_COLORS["octo"])
+    def explosion(self, colors, x, y, big=False):
+        """colors: list of (r, g, b) 0-255 tuples for the burst."""
         if big:
             self.particles.burst(x, y, colors, count=220, speed=(2.5, 11.0),
                                  life=(0.6, 1.6), scale=(0.06, 0.22), emissive=1.9)
@@ -163,82 +146,22 @@ class Renderer:
         out[:, 8:12] = self.star_color
         return out
 
-    # ------------------------------------------------------- world drawing
-    def draw_world(self, world, skin_id):
+    # ------------------------------------------------------- scene drawing
+    def draw_scene(self, batcher, walls=True):
+        """Draw backdrop + a game's Batcher + particles in one pass."""
         vp = self._viewproj()
         self.shader.use(vp)
 
         self.cube.draw(self._star_instances())
-        self.cube.draw(self.wall_instances)
+        if walls:
+            self.cube.draw(self.wall_instances)
 
-        batches = {}  # sprite -> list of instance rows
-
-        def add(sprite, fx, fy, scale, quat=IDENTITY_QUAT, tint=(1, 1, 1, 1), z=0.0):
-            x, y, wz = world_from_field(fx, fy, z)
-            batches.setdefault(sprite, []).append(
-                (x, y, wz, scale, *quat, *tint))
-
-        t = self.time
-
-        for e in world.enemies:
-            frame = "a" if int(e.time_alive * 2.5) % 2 == 0 else "b"
-            wobble = quat_axis_angle(0, 0, 1, math.sin(t * 1.7 + e.bob_phase) * 0.07)
-            add(f"enemy_{e.kind}_{frame}", e.x, e.y, SCALES["enemy"],
-                quat=wobble, tint=ENEMY_TINTS[e.kind])
-
-        boss = world.boss
-        if boss is not None and boss.alive:
-            pulse = 1.0 + 0.12 * max(0.0, math.sin(t * (2.0 + boss.phase)))
-            flash = 1.0 + (boss.phase - 1) * 0.12
-            add("boss", boss.x, boss.y, SCALES["boss"],
-                quat=quat_axis_angle(0, 0, 1, math.sin(t * 0.8) * 0.08),
-                tint=(flash * pulse, flash, flash * pulse, 1.0))
-
-        for b in world.player_bullets:
-            add("bullet_player", b.x, b.y, SCALES["bullet_player"],
-                tint=(1.7, 1.7, 1.9, 1.0))
-
-        for b in world.enemy_bullets:
-            spin = quat_axis_angle(0, 0, 1, t * 4.0 + (id(b) % 100) * 0.06)
-            add(b.sprite, b.x, b.y, SCALES.get(b.sprite, 0.17),
-                quat=spin, tint=(1.75, 1.75, 1.75, 1.0))
-
-        for pu in world.powerups:
-            spin = quat_axis_angle(0, 1, 0, t * 2.4 + pu.time_alive)
-            add(POWERUP_SPRITES[pu.kind], pu.x, pu.y, SCALES["powerup"],
-                quat=spin, tint=(1.5, 1.5, 1.5, 1.0))
-
-        p = world.player
-        if p.alive:
-            skin = SKINS[skin_id]
-            tint = [1.0, 1.0, 1.0, 1.0]
-            if skin["special"] == "translucent":
-                tint[3] = 0.55
-            elif skin["special"] == "hue_cycle":
-                r, g, b = colorsys.hsv_to_rgb((t * 0.18) % 1.0, 0.6, 1.0)
-                tint[0], tint[1], tint[2] = r * 1.35, g * 1.35, b * 1.35
-            if p.invuln > 0:
-                tint[3] *= 0.45 + 0.4 * math.sin(t * 24)
-            bank = quat_axis_angle(0, 1, 0, math.sin(t * 3.1) * 0.12)
-            add(skin["sprite"], p.x, p.y, SCALES["ship"], quat=bank, tint=tuple(tint))
-
-            if p.shield:
-                aura = quat_axis_angle(0.4, 1, 0.2, t * 1.5)
-                add("powerup_shield", p.x, p.y, 0.34, quat=aura,
-                    tint=(0.5, 0.8, 1.6, 0.22))
-
-        for sprite, rows in batches.items():
+        for sprite, rows in batcher.batches.items():
             self.meshes[sprite].draw(np.asarray(rows, dtype=np.float32))
 
-        # focus hitbox indicator + particles: emissive, drawn last
-        late = []
-        if p.alive and getattr(self, "show_hitbox", False):
-            x, y, z = world_from_field(p.x, p.y, 0.6)
-            late.append((x, y, z, 0.11, *quat_axis_angle(0, 0, 1, t * 3),
-                         2.6, 2.4, 2.6, 1.0))
         parts = self.particles.instances()
-        if late:
-            late_arr = np.asarray(late, dtype=np.float32)
+        if batcher.late_cubes:
+            late_arr = np.asarray(batcher.late_cubes, dtype=np.float32)
             parts = np.vstack([parts, late_arr]) if len(parts) else late_arr
         if len(parts):
             self.cube.draw(parts)

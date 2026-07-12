@@ -1,16 +1,16 @@
-"""Lifetime stat accumulation from world events into the profile."""
+"""Lifetime stat accumulation from world events into a game's profile section."""
 from game import events as ev
 
 
 class StatsTracker:
-    """Feed it each frame's events (+ dt); it keeps profile['lifetime']
-    current. The caller decides when to persist the profile."""
+    """Feed it each frame's events (+ dt); it keeps the game section's
+    lifetime dict current. The caller decides when to persist the profile."""
 
-    def __init__(self, profile):
-        self.profile = profile
+    def __init__(self, game_section):
+        self.section = game_section
 
     def on_frame(self, dt, frame_events):
-        life = self.profile["lifetime"]
+        life = self.section["lifetime"]
         life["playtime"] += dt
         for etype, data in frame_events:
             if etype == ev.ENEMY_KILLED:
@@ -31,6 +31,7 @@ class StatsTracker:
                 life["runs"] += 1
                 if summary["win"]:
                     life["wins"] += 1
-                life["hits"] += summary["hits"]
+                life["hits"] += summary.get("hits", 0)
                 life["best_score"] = max(life["best_score"], summary["score"])
-                life["best_wave"] = max(life["best_wave"], summary["wave_reached"])
+                life["best_wave"] = max(life["best_wave"],
+                                        summary.get("wave_reached", 0))

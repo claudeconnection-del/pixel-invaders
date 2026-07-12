@@ -1,8 +1,8 @@
-"""Headless simulation tests: drive the full campaign with a scripted bot.
+"""Headless simulation tests: drive campaigns and endless mode with a bot.
 
 Run with: python tools/test_world.py
 No pygame/GL required — exercises waves, patterns, collisions, graze,
-power-ups, boss phases, and both run endings.
+power-ups, boss phases, campaign loops, endless sectors, and the loss path.
 """
 import os
 import random
@@ -11,8 +11,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from game import events as ev  # noqa: E402
-from game.entities import InputState, FIELD_WIDTH  # noqa: E402
-from game.world import World, WON, LOST  # noqa: E402
+from game.entities import InputState  # noqa: E402
+from games.voxelhell.world import World, LOST  # noqa: E402
 
 DT = 1 / 60
 
@@ -50,34 +50,79 @@ def dodge_bot_input(world):
     return inp
 
 
-def run_campaign():
-    world = World(rng=random.Random(1234))
-    world.player.lives = 99  # traversal test: reach the end regardless of bot skill
+def run_campaign_loops():
+    """Clear loop 1, verify loop 2 starts harder, then die and check the
+    run ends as a win."""
+    world = World(rng=random.Random(1234), mode="campaign")
+    world.player.lives = 99
     seen = set()
     frames = 0
-    max_frames = 60 * 60 * 12  # 12 minute cap
-    while not world.run_over and frames < max_frames:
+    max_frames = 60 * 60 * 12
+    while world.loop == 1 and frames < max_frames and not world.run_over:
         world.update(DT, dodge_bot_input(world))
         for kind, data in world.drain_events():
             seen.add(kind)
-            if kind == ev.RUN_END:
-                summary = data["summary"]
         frames += 1
+    assert ev.LOOP_CLEAR in seen, "never cleared loop 1"
+    assert world.won
 
-    assert world.state == WON, f"expected WON, got {world.state} after {frames} frames"
-    for expected in (ev.WAVE_START, ev.WAVE_CLEAR, ev.ENEMY_KILLED, ev.SHOT_FIRED,
-                     ev.BOSS_SPAWN, ev.BOSS_PHASE, ev.BOSS_KILLED, ev.RUN_END):
+    # ride into loop 2 and confirm a wave actually starts
+    loop2_started = False
+    for _ in range(60 * 30):
+        world.update(DT, dodge_bot_input(world))
+        for kind, data in world.drain_events():
+            if kind == ev.WAVE_START:
+                loop2_started = True
+        if loop2_started:
+            break
+    assert loop2_started and world.loop == 2, \
+        f"loop 2 never started (loop={world.loop})"
+
+    # now die: run must end as a WIN because loop 1 was cleared
+    world.player.lives = 1
+    got_end = None
+    for _ in range(60 * 120):
+        world.update(DT, InputState())
+        for kind, data in world.drain_events():
+            if kind == ev.RUN_END:
+                got_end = data
+        if world.run_over:
+            break
+    assert world.state == LOST and got_end is not None
+    assert got_end["win"] is True, "run after loop clear should count as win"
+    for expected in (ev.WAVE_START, ev.WAVE_CLEAR, ev.ENEMY_KILLED,
+                     ev.BOSS_SPAWN, ev.BOSS_PHASE, ev.BOSS_KILLED, ev.LOOP_CLEAR):
         assert expected in seen, f"never saw event {expected}"
-    assert summary["win"] and summary["score"] > 0 and summary["kills"] > 0
-    assert summary["wave_reached"] == len(world.waves) + 1
-    print(f"campaign WIN in {frames} frames ({frames/60:.0f}s sim time): "
-          f"score={summary['score']} kills={summary['kills']} "
-          f"grazes={summary['grazes']} accuracy={summary['accuracy']:.0%} "
-          f"deaths={summary['deaths']} powerups={summary['powerups']}")
+    s = got_end["summary"]
+    print(f"campaign loops OK: frames={frames} score={s['score']} "
+          f"loop={s['loop']} waves={s['wave_reached']} kills={s['kills']}")
+
+
+def run_endless():
+    world = World(rng=random.Random(777), mode="endless")
+    world.player.lives = 99
+    boss_slots = 0
+    max_wave = 0
+    frames = 0
+    while frames < 60 * 60 * 10 and not world.run_over:
+        world.update(DT, dodge_bot_input(world))
+        for kind, data in world.drain_events():
+            if kind == ev.WAVE_START:
+                assert data["mode"] == "endless"
+                max_wave = max(max_wave, data["index"] + 1)
+            elif kind == ev.BOSS_SPAWN:
+                boss_slots += 1
+        frames += 1
+        if max_wave >= 7:
+            break
+    assert max_wave >= 7, f"endless stalled at wave {max_wave}"
+    assert boss_slots >= 1, "endless never spawned a boss (expected at sector 5)"
+    print(f"endless OK: reached sector {max_wave} with {boss_slots} boss(es) "
+          f"in {frames} frames")
 
 
 def run_loss():
-    world = World(rng=random.Random(99))
+    world = World(rng=random.Random(99), mode="campaign")
     world.player.lives = 1
     frames = 0
     got_run_end = False
@@ -94,21 +139,23 @@ def run_loss():
 
 
 def run_determinism():
-    def run_n(seed, n):
-        w = World(rng=random.Random(seed))
+    def run_n(seed, n, mode):
+        w = World(rng=random.Random(seed), mode=mode)
         for _ in range(n):
             w.update(DT, dodge_bot_input(w))
             w.drain_events()
         return (w.score, len(w.enemy_bullets), len(w.enemies), w.player.x)
 
-    a = run_n(42, 3000)
-    b = run_n(42, 3000)
-    assert a == b, f"same seed diverged: {a} vs {b}"
-    print(f"determinism OK: {a}")
+    for mode in ("campaign", "endless"):
+        a = run_n(42, 3000, mode)
+        b = run_n(42, 3000, mode)
+        assert a == b, f"{mode}: same seed diverged: {a} vs {b}"
+        print(f"determinism OK ({mode}): {a}")
 
 
 if __name__ == "__main__":
     run_determinism()
     run_loss()
-    run_campaign()
+    run_endless()
+    run_campaign_loops()
     print("ALL WORLD TESTS PASSED")

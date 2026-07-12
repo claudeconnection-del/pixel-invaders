@@ -1,5 +1,10 @@
 """The bullet-hell simulation. Pure logic — no pygame, no GL.
 
+Modes:
+    campaign - authored waves + boss; clearing the boss starts the next LOOP
+               at higher difficulty. The run ends only on death.
+    endless  - procedural sectors that escalate forever; boss every 5th.
+
 Owns all entities, runs collisions/graze/scoring/wave progression, and emits
 events (game.events) that the shell, stats, achievements, audio, and particle
 systems consume. Deterministic under a seeded rng for testing.
@@ -19,13 +24,16 @@ from game.entities import (
     circles_hit,
     dist_sq,
 )
-from game.patterns import PatternContext
-from game.waves import (
+from games.voxelhell.patterns import PatternContext
+from games.voxelhell.waves import (
     ENEMY_STATS,
+    ENDLESS_BOSS_EVERY,
     BOSS_MAX_HP,
     PHASE_THRESHOLDS,
     build_waves,
     build_boss_phases,
+    build_endless_wave,
+    endless_difficulty,
 )
 
 MAX_ENEMY_BULLETS = 400
@@ -36,14 +44,18 @@ INTRO = "intro"              # brief pause before wave 1
 WAVE = "wave"
 INTERMISSION = "intermission"
 BOSS_FIGHT = "boss"
-CELEBRATING = "celebrating"  # boss died, brief fanfare before run end
-WON = "won"
+CELEBRATING = "celebrating"  # boss died, fanfare before the next loop/sector
 LOST = "lost"
 
 
+def campaign_difficulty(loop):
+    return 1.0 + 0.35 * (loop - 1)
+
+
 class World:
-    def __init__(self, rng=None):
+    def __init__(self, rng=None, mode="campaign"):
         self.rng = rng or random.Random()
+        self.mode = mode
         self.player = Player()
         self.player_bullets = []
         self.enemy_bullets = []
@@ -57,14 +69,16 @@ class World:
         self.time = 0.0
         self.state = INTRO
         self.state_timer = 1.6
-        self.wave_index = -1
+        self.loop = 1                 # campaign loop number
+        self.won = False              # cleared at least loop 1 (campaign)
+        self.wave_index = -1          # index within current loop / endless depth
         self.waves = build_waves(self.rng)
         self.boss_phase_factories = build_boss_phases(self.rng)
         self.hit_this_wave = False
         self.stats = {
             "kills": 0, "shots": 0, "hits": 0, "grazes": 0, "powerups": 0,
             "deaths": 0, "max_multiplier": 1.0, "duration": 0.0,
-            "wave_reached": 1,
+            "wave_reached": 0, "loop": 1, "mode": mode,
         }
 
     # ------------------------------------------------------------- helpers
@@ -78,7 +92,12 @@ class World:
 
     @property
     def run_over(self):
-        return self.state in (WON, LOST)
+        return self.state == LOST
+
+    def _difficulty(self):
+        if self.mode == "endless":
+            return endless_difficulty(max(0, self.wave_index))
+        return campaign_difficulty(self.loop)
 
     # ------------------------------------------------------------ spawning
     def _spawn_enemy_bullet(self, x, y, angle, speed, sprite="bullet_enemy",
@@ -91,14 +110,38 @@ class World:
             r=r, sprite=sprite, curve=curve,
         ))
 
-    def _start_wave(self, index):
+    def _is_endless_boss_slot(self, index):
+        return self.mode == "endless" and (index + 1) % ENDLESS_BOSS_EVERY == 0
+
+    def _advance(self):
+        """Start the next wave slot (or boss) for the current mode."""
+        index = self.wave_index + 1
+        if self.mode == "campaign":
+            if index < len(self.waves):
+                self._start_wave(index, self.waves[index])
+            else:
+                self._start_boss(BOSS_MAX_HP * (1 + 0.5 * (self.loop - 1)))
+        else:
+            if self._is_endless_boss_slot(index):
+                self.wave_index = index
+                self.stats["wave_reached"] += 1
+                depth_hp = BOSS_MAX_HP * (0.7 + 0.15 * (index // ENDLESS_BOSS_EVERY))
+                self.emit(ev.WAVE_START, index=index, name="DREADNOUGHT",
+                          mode=self.mode)
+                self._start_boss(depth_hp)
+            else:
+                self._start_wave(index, build_endless_wave(self.rng, index))
+
+    def _start_wave(self, index, wave):
         self.wave_index = index
         self.state = WAVE
         self.hit_this_wave = False
-        self.stats["wave_reached"] = max(self.stats["wave_reached"], index + 1)
-        wave = self.waves[index]
+        self.stats["wave_reached"] += 1
+        difficulty = self._difficulty()
         for spec in wave["enemies"]:
             hp, points, radius = ENEMY_STATS[spec["kind"]]
+            if spec["kind"] == "elite" and difficulty >= 1.7:
+                hp += 1
             e = Enemy(
                 kind=spec["kind"],
                 slot_x=spec["slot"][0], slot_y=spec["slot"][1],
@@ -108,15 +151,22 @@ class World:
                 bob_phase=self.rng.uniform(0, math.tau),
                 patterns=spec["patterns"](),
             )
+            for pat in e.patterns:
+                pat.scale(difficulty)
             self.enemies.append(e)
-        self.emit(ev.WAVE_START, index=index, name=wave["name"])
+        self.emit(ev.WAVE_START, index=index, name=wave["name"], mode=self.mode)
 
-    def _start_boss(self):
+    def _start_boss(self, max_hp):
         self.state = BOSS_FIGHT
-        self.stats["wave_reached"] = len(self.waves) + 1
         self.hit_this_wave = False
-        self.boss = Boss(hp=BOSS_MAX_HP, max_hp=BOSS_MAX_HP)
+        if self.mode == "campaign":
+            self.wave_index = len(self.waves)
+            self.stats["wave_reached"] += 1
+        max_hp = int(max_hp)
+        self.boss = Boss(hp=max_hp, max_hp=max_hp)
         self.boss_patterns = self.boss_phase_factories[1]()
+        for pat in self.boss_patterns:
+            pat.scale(self._difficulty())
         self.emit(ev.BOSS_SPAWN)
 
     # -------------------------------------------------------------- update
@@ -157,28 +207,31 @@ class World:
         if self.state == INTRO:
             self.state_timer -= dt
             if self.state_timer <= 0:
-                self._start_wave(0)
+                self._advance()
         elif self.state == WAVE:
             if not self.enemies:
-                wave = self.waves[self.wave_index]
                 bonus = int(300 * (self.wave_index + 1) * self.multiplier)
                 self.score += bonus
-                self.emit(ev.WAVE_CLEAR, index=self.wave_index, name=wave["name"],
-                          untouched=not self.hit_this_wave, bonus=bonus)
+                self.emit(ev.WAVE_CLEAR, index=self.wave_index, name="",
+                          untouched=not self.hit_this_wave, bonus=bonus,
+                          mode=self.mode)
                 self.state = INTERMISSION
                 self.state_timer = 2.2
         elif self.state == INTERMISSION:
             self.state_timer -= dt
             if self.state_timer <= 0:
-                if self.wave_index + 1 < len(self.waves):
-                    self._start_wave(self.wave_index + 1)
-                else:
-                    self._start_boss()
+                self._advance()
         elif self.state == CELEBRATING:
             self.state_timer -= dt
             if self.state_timer <= 0:
-                self.state = WON
-                self.emit(ev.RUN_END, win=True, summary=self.run_summary(True))
+                if self.mode == "campaign":
+                    # next loop: same authored campaign, meaner
+                    self.loop += 1
+                    self.stats["loop"] = self.loop
+                    self.wave_index = -1
+                    self.waves = build_waves(self.rng)
+                self.state = INTERMISSION
+                self.state_timer = 1.8
 
     def _handle_player_fire(self, inp):
         p = self.player
@@ -268,6 +321,11 @@ class World:
             self.stats["kills"] += 1
             self.emit(ev.BOSS_KILLED, x=boss.x, y=boss.y)
             self.enemy_bullets.clear()
+            if self.mode == "campaign":
+                bonus = int(2000 * self.loop * self.multiplier)
+                self.score += bonus
+                self.won = True
+                self.emit(ev.LOOP_CLEAR, loop=self.loop, bonus=bonus)
             self.state = CELEBRATING
             self.state_timer = 2.5
             return
@@ -277,6 +335,8 @@ class World:
         if new_phase != boss.phase:
             boss.phase = new_phase
             self.boss_patterns = self.boss_phase_factories[new_phase]()
+            for pat in self.boss_patterns:
+                pat.scale(self._difficulty())
             self.enemy_bullets.clear()
             self.emit(ev.BOSS_PHASE, phase=new_phase, x=boss.x, y=boss.y)
 
@@ -321,7 +381,7 @@ class World:
             p.alive = False
             self.state = LOST
             self.emit(ev.PLAYER_DEATH)
-            self.emit(ev.RUN_END, win=False, summary=self.run_summary(False))
+            self.emit(ev.RUN_END, win=self.won, summary=self.run_summary(self.won))
         else:
             p.invuln = 2.0
             p.x, p.y = FIELD_WIDTH / 2, FIELD_HEIGHT - 70

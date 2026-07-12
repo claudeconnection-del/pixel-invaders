@@ -1,17 +1,16 @@
 """Persistent player profile: schema-versioned JSON with atomic writes.
 
-One local file (profile.json, gitignored) survives restarts and stores
-scores, lifetime stats, unlocked skins, achievements, and settings.
+v2 layout (multi-game cabinet): global settings + local leaderboards at the
+top level; per-game progress under games.<game_id>.
 """
 import copy
 import json
 import os
 import tempfile
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-DEFAULT_PROFILE = {
-    "version": SCHEMA_VERSION,
+GAME_SECTION_DEFAULT = {
     "selected_skin": "vanguard",
     "unlocked_skins": ["vanguard"],
     "achievements": {},  # id -> {"unlocked_at": iso8601}
@@ -29,6 +28,13 @@ DEFAULT_PROFILE = {
         "best_score": 0,
         "best_wave": 0,
     },
+}
+
+DEFAULT_PROFILE = {
+    "version": SCHEMA_VERSION,
+    "selected_game": "voxelhell",
+    "games": {},  # game_id -> GAME_SECTION_DEFAULT copy, created on demand
+    "leaderboard": {},  # "game:mode" -> [{name, score, wave, date}] top 10
     "settings": {
         "crt": True,
         "music": True,
@@ -43,13 +49,37 @@ DEFAULT_PROFILE = {
         "player_name": "AAA",  # arcade initials
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8000
     },
-    "leaderboard": {},  # mode -> [{name, score, wave, loop, date}] local top 10
 }
 
 
 def default_path():
     return os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profile.json")
+
+
+def game_section(profile, game_id):
+    """Fetch (creating if missing) a game's progress section."""
+    if game_id not in profile["games"]:
+        profile["games"][game_id] = copy.deepcopy(GAME_SECTION_DEFAULT)
+    section = profile["games"][game_id]
+    # merge any new default keys into old saves
+    for key, value in GAME_SECTION_DEFAULT["lifetime"].items():
+        section.setdefault("lifetime", {}).setdefault(key, value)
+    for key, value in GAME_SECTION_DEFAULT.items():
+        section.setdefault(key, copy.deepcopy(value))
+    return section
+
+
+def _migrate_v1(saved, profile):
+    """v1 kept voxelhell's progress at the top level."""
+    section = game_section(profile, "voxelhell")
+    for key in ("selected_skin", "unlocked_skins", "achievements"):
+        if key in saved:
+            section[key] = saved[key]
+    if isinstance(saved.get("lifetime"), dict):
+        section["lifetime"].update(saved["lifetime"])
+    if isinstance(saved.get("leaderboard"), dict):
+        profile["leaderboard"].update(saved["leaderboard"])
 
 
 def load(path=None):
@@ -64,8 +94,15 @@ def load(path=None):
         return profile
     if not isinstance(saved, dict):
         return profile
+
+    if saved.get("version", 1) < 2:
+        if isinstance(saved.get("settings"), dict):
+            profile["settings"].update(saved["settings"])
+        _migrate_v1(saved, profile)
+        return profile
+
     for key, value in saved.items():
-        if key in ("lifetime", "settings", "leaderboard") and isinstance(value, dict):
+        if key in ("settings", "leaderboard", "games") and isinstance(value, dict):
             profile[key].update(value)
         elif key in profile:
             profile[key] = value

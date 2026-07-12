@@ -1,6 +1,6 @@
-"""App-level smoke test: boots the real App against a hidden GL window,
-drives every screen, plays a stretch of the campaign with the test bot,
-and forces both run endings. Catches wiring errors before committing.
+"""App-level smoke test: boots the real cabinet against a hidden GL window,
+drives every screen for every registered game, plays a stretch of each
+game/mode with a bot where available, and checks persistence.
 
 Run with: python tools/smoke_test.py
 """
@@ -23,6 +23,7 @@ import pygame  # noqa: E402
 def main():
     import main as game_main
     from game.entities import InputState
+    from games import GAME_IDS
     from tools.test_world import dodge_bot_input
 
     # patch: hidden window instead of visible one (App sets GL attributes)
@@ -36,69 +37,65 @@ def main():
     def render_frame():
         app.update_timers(dt)
         app.renderer.begin(dt)
-        if app.state in (game_main.PLAYING, game_main.PAUSED, game_main.RUN_END) \
-                and app.world is not None:
-            app.renderer.draw_world(app.world, app.profile["selected_skin"])
-        else:
-            app.renderer.draw_starfield_only()
-        app.renderer.begin_overlay()
-        if app.state == game_main.MENU:
-            app.draw_menu()
-        elif app.state == game_main.SKINS_SCREEN:
-            app.draw_skins()
-        elif app.state == game_main.ACHIEVEMENTS_SCREEN:
-            app.draw_achievements()
-        elif app.state == game_main.STATS_SCREEN:
-            app.draw_stats()
-        elif app.state in (game_main.PLAYING, game_main.PAUSED):
-            app.draw_hud()
-            if app.state == game_main.PAUSED:
-                app.draw_paused()
-        elif app.state == game_main.RUN_END:
-            app.draw_run_end()
+        app.draw_3d_layer(dt, 0.0)
+        app.draw_overlay_layer()
         app.renderer.finish(crt=True)
         pygame.display.flip()
 
-    # menu screens render without crashing
-    for state in (game_main.MENU, game_main.ACHIEVEMENTS_SCREEN,
-                  game_main.STATS_SCREEN, game_main.SKINS_SCREEN):
-        app.state = state
-        for _ in range(3):
+    # every cabinet screen for every game
+    for gid in GAME_IDS:
+        app.game_id = gid
+        for state in (game_main.MENU, game_main.ACHIEVEMENTS_SCREEN,
+                      game_main.STATS_SCREEN, game_main.SETTINGS_SCREEN):
+            app.state = state
+            for _ in range(2):
+                render_frame()
+        if app.game.INFO.has_skins:
+            app.state = game_main.HANGAR
+            for _ in range(len(app.game.SKIN_ORDER)):
+                app.handle_keydown(pygame.K_RIGHT)
+                render_frame()
+        if len(app.game.INFO.modes) > 1:
+            app.state = game_main.MODE_SELECT
             render_frame()
-    print("menu screens OK")
+    print(f"cabinet screens OK for {GAME_IDS}")
 
-    # skin browsing
-    app.state = game_main.SKINS_SCREEN
-    for _ in range(len(game_main.SKIN_ORDER)):
-        app.handle_keydown(pygame.K_RIGHT)
+    # settings adjustments apply cleanly
+    app.state = game_main.SETTINGS_SCREEN
+    for idx in (0, 3, 4, 6, 8):
+        app.settings_index = idx
+        app.adjust_setting(idx, 1)
         render_frame()
-    print("skin browsing OK")
+    print("settings adjustments OK")
 
-    # play ~20 seconds of campaign with the bot
-    app.state = game_main.MENU
-    app.start_run()
-    assert app.state == game_main.PLAYING
-    for frame in range(60 * 20):
-        bot = dodge_bot_input(app.world)
-        app.gameplay_input = lambda b=bot: b
-        app.update_playing(dt)
-        render_frame()
-        if app.state == game_main.RUN_END:
-            break
-    print(f"gameplay OK (state={app.state}, score={app.world.score}, "
-          f"kills={app.world.stats['kills']})")
-
-    # pause/resume
-    if app.state == game_main.PLAYING:
-        app.handle_keydown(pygame.K_ESCAPE)
-        assert app.state == game_main.PAUSED
-        render_frame()
-        app.handle_keydown(pygame.K_ESCAPE)
+    # play both voxelhell modes with the bot
+    app.game_id = "voxelhell"
+    for mode in ("campaign", "endless"):
+        app.state = game_main.MENU
+        app.start_run(mode)
         assert app.state == game_main.PLAYING
-        print("pause/resume OK")
+        for frame in range(60 * 15):
+            bot = dodge_bot_input(app.run.world)
+            app.gameplay_input = lambda b=bot: b
+            app.update_playing(dt)
+            render_frame()
+            if app.state == game_main.RUN_END:
+                break
+        print(f"voxelhell {mode} OK (state={app.state}, score={app.run.score})")
+        # pause/resume then abandon cleanly
+        if app.state == game_main.PLAYING:
+            app.handle_keydown(pygame.K_ESCAPE)
+            assert app.state == game_main.PAUSED
+            render_frame()
+            app.handle_keydown(pygame.K_ESCAPE)
+            assert app.state == game_main.PLAYING
+            app.handle_keydown(pygame.K_ESCAPE)
+            app.handle_keydown(pygame.K_q)
+            assert app.state == game_main.MENU
 
     # force a loss -> run end screen renders, profile written
-    app.world.player.lives = 1
+    app.start_run("campaign")
+    app.run.world.player.lives = 1
     app.gameplay_input = lambda: InputState()
     for _ in range(60 * 60):
         app.update_playing(dt)
@@ -110,10 +107,10 @@ def main():
         render_frame()
     assert os.path.exists(profile_mod.default_path()), "profile not saved"
     loaded = profile_mod.load()
-    assert loaded["lifetime"]["runs"] >= 1
-    print(f"run end + profile persistence OK "
-          f"(runs={loaded['lifetime']['runs']}, kills={loaded['lifetime']['kills']}, "
-          f"achievements={sorted(loaded['achievements'])})")
+    section = profile_mod.game_section(loaded, "voxelhell")
+    assert section["lifetime"]["runs"] >= 1
+    print(f"run end + persistence OK (runs={section['lifetime']['runs']}, "
+          f"achievements={sorted(section['achievements'])})")
 
     pygame.quit()
     print("SMOKE TEST PASSED")

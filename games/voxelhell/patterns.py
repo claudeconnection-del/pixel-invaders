@@ -30,6 +30,10 @@ class AimedBurst:
         self.sprite = sprite
         self.timer = -start_delay
 
+    def scale(self, d):
+        self.interval /= d
+        self.speed *= 1 + 0.3 * (d - 1)
+
     def update(self, dt, ctx, x, y):
         self.timer += dt
         if self.timer < self.interval:
@@ -54,6 +58,11 @@ class RadialBurst:
         self.sprite = sprite
         self.timer = -start_delay
         self.volley = 0
+
+    def scale(self, d):
+        self.interval /= d
+        self.speed *= 1 + 0.3 * (d - 1)
+        self.count = int(self.count * (1 + 0.2 * (d - 1)))
 
     def update(self, dt, ctx, x, y):
         self.timer += dt
@@ -82,6 +91,11 @@ class Spiral:
         self.angle = 0.0
         self.emit_acc = -start_delay * rate
 
+    def scale(self, d):
+        self.rate *= d
+        self.speed *= 1 + 0.3 * (d - 1)
+        self.omega *= 1 + 0.2 * (d - 1)
+
     def update(self, dt, ctx, x, y):
         self.angle += self.omega * dt
         self.emit_acc += self.rate * dt
@@ -107,6 +121,10 @@ class WallVolley:
         self.sprite = sprite
         self.timer = -start_delay
         self.rng = rng
+
+    def scale(self, d):
+        self.interval /= d
+        self.speed *= 1 + 0.3 * (d - 1)
 
     def update(self, dt, ctx, x, y):
         self.timer += dt

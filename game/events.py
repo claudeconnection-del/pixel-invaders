@@ -17,4 +17,10 @@ POWERUP_PICKUP = "powerup_pickup"  # {kind, x, y}
 BOSS_SPAWN = "boss_spawn"          # {}
 BOSS_PHASE = "boss_phase"          # {phase, x, y}
 BOSS_KILLED = "boss_killed"        # {x, y}
+LOOP_CLEAR = "loop_clear"          # {loop, bonus} campaign loop finished
 RUN_END = "run_end"                # {win, summary}
+
+# generic vocabulary reused by other cabinet games
+BALL_LOST = "ball_lost"            # {x, y} (breaker)
+LEVEL_CLEAR = "level_clear"        # {index, bonus}
+FRUIT_EATEN = "fruit_eaten"        # {kind, x, y, length} (serpent)

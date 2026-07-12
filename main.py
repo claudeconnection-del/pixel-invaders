@@ -1,12 +1,11 @@
-"""Pixel Invaders: Voxel Hell — 8-bit voxel bullet-hell built with
+"""Pixel Invaders arcade cabinet — a multi-game 8-bit voxel arcade built with
 pygame-ce + PyOpenGL. All art and audio generated from code.
 
-Controls:
-    Left/Right/Up/Down or WASD - move        Space - shoot (hold)
-    Shift - focus (slow + show hitbox)       Enter - confirm
-    Esc - pause / back                       C - CRT filter, M - music
+Cabinet controls:
+    Arrows / WASD - navigate + play      Enter - confirm
+    Esc - pause / back                   C - CRT filter, M - music
+Game controls are per-game (Voxel Hell: Space fire, Shift focus).
 """
-import math
 import random
 import sys
 
@@ -15,18 +14,17 @@ import pygame
 from game import events as ev
 from game.assets import AudioBank
 from game.entities import InputState
-from game.skins import SKINS, SKIN_ORDER
-from game.world import World, INTERMISSION, INTRO
+from games import load_games, GAME_IDS
 from meta import profile as profile_mod
-from meta.achievements import ACHIEVEMENTS, AchievementEngine
+from meta.achievements import AchievementEngine
 from meta.stats import StatsTracker
 
 WIDTH, HEIGHT = 1280, 860
-FPS = 60
 
 # app states
 MENU = "menu"
-SKINS_SCREEN = "skins"
+MODE_SELECT = "mode_select"
+HANGAR = "hangar"
 ACHIEVEMENTS_SCREEN = "achievements"
 STATS_SCREEN = "stats"
 SETTINGS_SCREEN = "settings"
@@ -41,10 +39,7 @@ GOLD = (250, 220, 90, 255)
 RED = (255, 110, 100, 255)
 CYAN = (140, 235, 255, 255)
 
-MENU_ITEMS = ["PLAY", "SKINS", "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
-
-SHOWCASE_SPRITES = ["boss", "enemy_octo_a", "enemy_crab_a", "enemy_squid_a",
-                    "enemy_elite_a"]
+MENU_ITEMS = ["PLAY", "HANGAR", "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
 
 # (label, settings key, choices) — Left/Right cycles; floats step by 0.1
 SETTINGS_ROWS = [
@@ -59,6 +54,21 @@ SETTINGS_ROWS = [
     ("Show FPS", "show_fps", [False, True]),
 ]
 DISPLAY_KEYS = {"vsync", "fullscreen"}  # need a window/context rebuild
+
+SUMMARY_ROWS = [
+    ("score", "Score", "{:,}"),
+    ("wave_reached", "Waves survived", "{}"),
+    ("loop", "Loop", "{}"),
+    ("level_reached", "Level reached", "{}"),
+    ("length", "Final length", "{}"),
+    ("kills", "Destroyed", "{}"),
+    ("accuracy", "Accuracy", "{:.0%}"),
+    ("grazes", "Bullets grazed", "{}"),
+    ("max_multiplier", "Max multiplier", "x{:.1f}"),
+    ("powerups", "Power-ups", "{}"),
+    ("deaths", "Deaths", "{}"),
+    ("duration", "Duration", "{:.0f}s"),
+]
 
 
 def settings_value_label(key, value):
@@ -78,7 +88,7 @@ class App:
             pygame.mixer.init()
         except pygame.error:
             pass
-        pygame.display.set_caption("Pixel Invaders: Voxel Hell")
+        pygame.display.set_caption("Pixel Invaders Arcade")
         self.clock = pygame.time.Clock()
 
         self.profile = profile_mod.load()
@@ -86,23 +96,41 @@ class App:
         self.apply_display_settings()
 
         self.audio = AudioBank()
-        self.stats = StatsTracker(self.profile)
-        self.engine = AchievementEngine(self.profile)
         self.audio.music_on = self.profile["settings"].get("music", True)
         self.audio.set_volumes(self.profile["settings"]["sfx_vol"],
                                self.profile["settings"]["music_vol"])
 
+        self.games = load_games()
+        gid = self.profile.get("selected_game", GAME_IDS[0])
+        self.game_id = gid if gid in self.games else GAME_IDS[0]
+
         self.state = MENU
         self.menu_index = 0
+        self.mode_index = 0
         self.settings_index = 0
-        self.skin_index = SKIN_ORDER.index(self.profile["selected_skin"])
-        self.world = None
+        self.skin_index = 0
+        self.run = None
+        self.run_stats_tracker = None
+        self.run_engine = None
         self.run_summary = None
         self.run_won = False
-        self.toasts = []          # [(Achievement, timer)]
+        self.toasts = []          # [[Achievement, timer], ...]
         self.wave_banner = None   # (text, timer)
-        self.graze_sfx_gate = 0.0
         self.showcase_index = 0
+
+    # ----------------------------------------------------------- accessors
+    @property
+    def game(self):
+        return self.games[self.game_id]
+
+    @property
+    def section(self):
+        return profile_mod.game_section(self.profile, self.game_id)
+
+    def engine_for_current_game(self):
+        module = self.game
+        resolver = getattr(module, "skin_for_achievement", None)
+        return AchievementEngine(self.section, module.ACHIEVEMENTS, resolver)
 
     # ------------------------------------------------------------- display
     def apply_display_settings(self):
@@ -129,11 +157,11 @@ class App:
         self.renderer = Renderer(WIDTH, HEIGHT, out_w, out_h)
         self.renderer.apply_quality(bloom=s["bloom"], particles=s["particles"])
 
-    # -------------------------------------------------------------- persistence
+    # --------------------------------------------------------- persistence
     def save_profile(self):
         profile_mod.save(self.profile)
 
-    # -------------------------------------------------------------- settings
+    # ------------------------------------------------------------ settings
     def adjust_setting(self, index, direction):
         label, key, choices = SETTINGS_ROWS[index]
         s = self.profile["settings"]
@@ -154,11 +182,15 @@ class App:
             self.audio.set_volumes(s["sfx_vol"], s["music_vol"])
         self.save_profile()
 
-    # ------------------------------------------------------------------ events
+    # --------------------------------------------------------------- input
     def handle_keydown(self, key):
         audio = self.audio
         if self.state == MENU:
-            if key in (pygame.K_UP, pygame.K_w):
+            if key in (pygame.K_LEFT, pygame.K_a):
+                self.cycle_game(-1)
+            elif key in (pygame.K_RIGHT, pygame.K_d):
+                self.cycle_game(1)
+            elif key in (pygame.K_UP, pygame.K_w):
                 self.menu_index = (self.menu_index - 1) % len(MENU_ITEMS)
                 audio.play("menu_move")
             elif key in (pygame.K_DOWN, pygame.K_s):
@@ -166,33 +198,37 @@ class App:
                 audio.play("menu_move")
             elif key == pygame.K_RETURN:
                 audio.play("menu_select")
-                choice = MENU_ITEMS[self.menu_index]
-                if choice == "PLAY":
-                    self.start_run()
-                elif choice == "SKINS":
-                    self.state = SKINS_SCREEN
-                elif choice == "ACHIEVEMENTS":
-                    self.state = ACHIEVEMENTS_SCREEN
-                elif choice == "STATS":
-                    self.state = STATS_SCREEN
-                elif choice == "SETTINGS":
-                    self.state = SETTINGS_SCREEN
-                elif choice == "QUIT":
-                    self.quit()
+                self.menu_choose(MENU_ITEMS[self.menu_index])
             elif key == pygame.K_ESCAPE:
                 self.quit()
 
-        elif self.state == SKINS_SCREEN:
-            if key in (pygame.K_LEFT, pygame.K_a):
-                self.skin_index = (self.skin_index - 1) % len(SKIN_ORDER)
+        elif self.state == MODE_SELECT:
+            modes = self.game.INFO.modes
+            if key in (pygame.K_UP, pygame.K_w, pygame.K_LEFT, pygame.K_a):
+                self.mode_index = (self.mode_index - 1) % len(modes)
                 audio.play("menu_move")
-            elif key in (pygame.K_RIGHT, pygame.K_d):
-                self.skin_index = (self.skin_index + 1) % len(SKIN_ORDER)
+            elif key in (pygame.K_DOWN, pygame.K_s, pygame.K_RIGHT, pygame.K_d):
+                self.mode_index = (self.mode_index + 1) % len(modes)
                 audio.play("menu_move")
             elif key == pygame.K_RETURN:
-                skin_id = SKIN_ORDER[self.skin_index]
-                if skin_id in self.profile["unlocked_skins"]:
-                    self.profile["selected_skin"] = skin_id
+                audio.play("menu_select")
+                self.start_run(modes[self.mode_index][0])
+            elif key == pygame.K_ESCAPE:
+                self.state = MENU
+
+        elif self.state == HANGAR:
+            module = self.game
+            order = module.SKIN_ORDER
+            if key in (pygame.K_LEFT, pygame.K_a):
+                self.skin_index = (self.skin_index - 1) % len(order)
+                audio.play("menu_move")
+            elif key in (pygame.K_RIGHT, pygame.K_d):
+                self.skin_index = (self.skin_index + 1) % len(order)
+                audio.play("menu_move")
+            elif key == pygame.K_RETURN:
+                skin_id = order[self.skin_index]
+                if skin_id in self.section["unlocked_skins"]:
+                    self.section["selected_skin"] = skin_id
                     self.save_profile()
                     audio.play("menu_select")
             elif key == pygame.K_ESCAPE:
@@ -236,18 +272,51 @@ class App:
                 self.audio.music("menu")
 
         # global toggles
-        if key == pygame.K_c:
+        if key == pygame.K_c and self.state != SETTINGS_SCREEN:
             self.profile["settings"]["crt"] = not self.profile["settings"]["crt"]
             self.save_profile()
-        elif key == pygame.K_m:
+        elif key == pygame.K_m and self.state != SETTINGS_SCREEN:
             on = not self.profile["settings"].get("music", True)
             self.profile["settings"]["music"] = on
             self.audio.set_music_enabled(on)
             self.save_profile()
 
-    # -------------------------------------------------------------------- runs
-    def start_run(self):
-        self.world = World(rng=random.Random())
+    def cycle_game(self, direction):
+        idx = GAME_IDS.index(self.game_id)
+        self.game_id = GAME_IDS[(idx + direction) % len(GAME_IDS)]
+        self.profile["selected_game"] = self.game_id
+        self.skin_index = 0
+        self.audio.play("menu_move")
+        self.save_profile()
+
+    def menu_choose(self, choice):
+        if choice == "PLAY":
+            modes = self.game.INFO.modes
+            if len(modes) > 1:
+                self.mode_index = 0
+                self.state = MODE_SELECT
+            else:
+                self.start_run(modes[0][0])
+        elif choice == "HANGAR":
+            if self.game.INFO.has_skins:
+                order = self.game.SKIN_ORDER
+                selected = self.section["selected_skin"]
+                self.skin_index = order.index(selected) if selected in order else 0
+                self.state = HANGAR
+        elif choice == "ACHIEVEMENTS":
+            self.state = ACHIEVEMENTS_SCREEN
+        elif choice == "STATS":
+            self.state = STATS_SCREEN
+        elif choice == "SETTINGS":
+            self.state = SETTINGS_SCREEN
+        elif choice == "QUIT":
+            self.quit()
+
+    # ---------------------------------------------------------------- runs
+    def start_run(self, mode):
+        self.run = self.game.create_run(mode, random.Random())
+        self.run_stats_tracker = StatsTracker(self.section)
+        self.run_engine = self.engine_for_current_game()
         self.run_summary = None
         self.toasts.clear()
         self.wave_banner = None
@@ -256,11 +325,10 @@ class App:
 
     def abandon_run(self):
         """Quit to menu mid-run: counts stats so far as an unfinished run."""
-        if self.world is not None and not self.world.run_over:
-            summary = self.world.run_summary(False)
-            self.profile["lifetime"]["runs"] += 1
-            self.profile["lifetime"]["hits"] += summary["hits"]
-        self.world = None
+        if self.run is not None and not self.run.run_over:
+            life = self.section["lifetime"]
+            life["runs"] += 1
+        self.run = None
         self.save_profile()
         self.state = MENU
         self.audio.music("menu")
@@ -270,7 +338,7 @@ class App:
         pygame.quit()
         sys.exit(0)
 
-    # -------------------------------------------------------------- game frame
+    # ------------------------------------------------------------ gameplay
     def gameplay_input(self):
         keys = pygame.key.get_pressed()
         return InputState(
@@ -282,142 +350,42 @@ class App:
             fire=keys[pygame.K_SPACE],
         )
 
-    def process_world_events(self, frame_events, dt):
-        r = self.renderer
-        audio = self.audio
-        self.graze_sfx_gate = max(0.0, self.graze_sfx_gate - dt)
+    def post_banner(self, text, seconds):
+        self.wave_banner = (text, seconds)
+
+    def update_playing(self, dt):
+        run = self.run
+        run.update(dt, self.gameplay_input())
+        frame_events = run.drain_events()
 
         for etype, data in frame_events:
-            if etype == ev.ENEMY_KILLED:
-                r.explosion(data["kind"], data["x"], data["y"])
-                r.add_shake(0.05)
-                audio.play("explosion_enemy")
-            elif etype == ev.SHOT_FIRED:
-                audio.play("shoot")
-            elif etype == ev.GRAZE:
-                r.particles.spark(data["x"], data["y"])
-                if self.graze_sfx_gate <= 0:
-                    audio.play("graze")
-                    self.graze_sfx_gate = 0.05
-            elif etype == ev.PLAYER_HIT:
-                r.explosion("player", data["x"], data["y"])
-                r.add_shake(0.45)
-                r.add_aberration(0.8)
-                audio.play("explosion_player")
-            elif etype == ev.SHIELD_BREAK:
-                r.particles.burst(data["x"], data["y"],
-                                  [(140, 180, 255), (240, 240, 240)], count=30)
-                r.add_shake(0.2)
-                audio.play("shield_break")
-            elif etype == ev.WAVE_START:
-                self.wave_banner = (f"WAVE {data['index'] + 1}: {data['name']}", 2.6)
-                audio.play(f"step_{data['index'] % 4}")
-            elif etype == ev.WAVE_CLEAR:
-                extra = "  [UNTOUCHED]" if data["untouched"] else ""
-                self.wave_banner = (f"WAVE CLEAR  +{data['bonus']}{extra}", 2.2)
-                audio.play("menu_select")
-            elif etype == ev.POWERUP_PICKUP:
-                r.particles.burst(data["x"], data["y"],
-                                  [(180, 255, 190), (250, 220, 90)], count=24,
-                                  gravity=0.2)
-                audio.play("powerup")
-            elif etype == ev.BOSS_SPAWN:
-                self.wave_banner = ("!!! DREADNOUGHT APPROACHES !!!", 3.0)
-                r.add_shake(0.5)
-                audio.play("boss_roar")
-            elif etype == ev.BOSS_PHASE:
-                self.wave_banner = (f"PHASE {data['phase']}", 1.6)
-                r.add_shake(0.4)
-                r.add_aberration(0.8)
-                audio.play("phase_sting")
-            elif etype == ev.BOSS_KILLED:
-                r.explosion("boss", data["x"], data["y"], big=True)
-                r.add_shake(0.6)
-                r.add_aberration(1.0)
-                audio.play("explosion_big")
-            elif etype == ev.RUN_END:
+            run.on_event(etype, data, self.renderer, self.audio, self.post_banner)
+            if etype == ev.RUN_END:
                 self.run_summary = data["summary"]
                 self.run_won = data["win"]
-                audio.play("win" if data["win"] else "game_over")
 
-        # achievements + stats
-        self.stats.on_frame(dt, frame_events)
-        if self.world is not None:
-            for achievement in self.engine.on_frame(frame_events, self.world.stats):
-                self.toasts.append([achievement, 3.5])
-                self.audio.play("toast")
-                self.save_profile()
+        self.run_stats_tracker.on_frame(dt, frame_events)
+        for achievement in self.run_engine.on_frame(frame_events, run.run_stats()):
+            self.toasts.append([achievement, 3.5])
+            self.audio.play("toast")
+            self.save_profile()
+
+        if hasattr(run, "per_frame_particles"):
+            run.per_frame_particles(self.renderer, random)
 
         if self.run_summary is not None and self.state == PLAYING:
             self.state = RUN_END
             self.audio.music(None)
             self.save_profile()
 
-    def update_playing(self, dt):
-        world = self.world
-        inp = self.gameplay_input()
-        world.update(dt, inp)
-        self.process_world_events(world.drain_events(), dt)
-        self.renderer.show_hitbox = inp.focus
-
-        p = world.player
-        if p.alive and not world.run_over:
-            self.renderer.particles.exhaust(p.x, p.y + 16)
-        for pu in world.powerups:
-            if random.random() < 0.35:
-                self.renderer.particles.glitter(pu.x, pu.y)
-
-    # --------------------------------------------------------------- HUD/menus
-    def draw_hud(self):
+    # ------------------------------------------------------------ overlays
+    def draw_banner_and_toasts(self):
         o = self.renderer.overlay
-        world = self.world
-        life = self.profile["lifetime"]
-        o.text(f"SCORE {world.score:07d}", 26, 16, size=22, color=GREEN)
-        o.text(f"BEST  {max(life['best_score'], world.score):07d}", 26, 46,
-               size=16, color=DIM)
-
-        # multiplier bar
-        frac = (world.multiplier - 1.0) / 4.0
-        o.text(f"x{world.multiplier:.1f}", 26, 76, size=18, color=GOLD)
-        o.rect(80, 80, 130, 10, (45, 45, 65, 220))
-        o.rect(80, 80, 130 * frac, 10, GOLD)
-        o.text(f"GRAZE {world.stats['grazes']}", 26, 100, size=14, color=CYAN)
-
-        o.text("LIVES", WIDTH - 210, 16, size=16, color=DIM)
-        for i in range(max(0, world.player.lives)):
-            o.rect(WIDTH - 130 + i * 26, 16, 18, 18, RED)
-
-        p = world.player
-        y = 46
-        if p.shield:
-            o.text("[SHIELD]", WIDTH - 150, y, size=14, color=CYAN)
-            y += 20
-        if p.spread_timer > 0:
-            o.text(f"[SPREAD {p.spread_timer:.0f}]", WIDTH - 150, y, size=14, color=GREEN)
-            y += 20
-        if p.rapid_timer > 0:
-            o.text(f"[RAPID {p.rapid_timer:.0f}]", WIDTH - 150, y, size=14, color=GOLD)
-
-        boss = world.boss
-        if boss is not None and boss.alive:
-            o.rect(WIDTH / 2 - 260, 22, 520, 18, (45, 45, 65, 230))
-            o.rect(WIDTH / 2 - 257, 25, 514 * boss.hp_frac, 12, (235, 70, 70, 255))
-            o.text("DREADNOUGHT", WIDTH / 2, 44, size=14, color=RED, center=True)
-
         if self.wave_banner is not None:
             text, timer = self.wave_banner
             alpha = int(255 * min(1.0, timer / 0.6))
             o.text(text, WIDTH / 2, HEIGHT * 0.36, size=34,
                    color=(GREEN[0], GREEN[1], GREEN[2], alpha), center=True)
-
-        if world.state in (INTRO, INTERMISSION):
-            o.text("GET READY", WIDTH / 2, HEIGHT * 0.5, size=22,
-                   color=WHITE, center=True)
-
-        self.draw_toasts()
-
-    def draw_toasts(self):
-        o = self.renderer.overlay
         y = 120
         for achievement, timer in self.toasts:
             slide = min(1.0, (3.5 - timer) * 5)
@@ -430,78 +398,110 @@ class App:
 
     def draw_menu(self):
         o = self.renderer.overlay
-        o.text("PIXEL INVADERS", WIDTH / 2, 130, size=64, color=GREEN, center=True)
-        o.text("V O X E L   H E L L", WIDTH / 2, 205, size=26, color=RED, center=True)
-        for i, item in enumerate(MENU_ITEMS):
-            selected = i == self.menu_index
+        info = self.game.INFO
+        o.text("PIXEL INVADERS ARCADE", WIDTH / 2, 90, size=48, color=GREEN,
+               center=True)
+        multi = len(GAME_IDS) > 1
+        title = f"< {info.name} >" if multi else info.name
+        o.text(title, WIDTH / 2, 190, size=34, color=RED, center=True)
+        o.text(info.tagline, WIDTH / 2, 240, size=16, color=DIM, center=True)
+
+        items = [m for m in MENU_ITEMS
+                 if m != "HANGAR" or info.has_skins]
+        if MENU_ITEMS[self.menu_index] not in items:
+            self.menu_index = 0
+        for i, item in enumerate(items):
+            actual_index = MENU_ITEMS.index(item)
+            selected = actual_index == self.menu_index
             color = WHITE if selected else DIM
             prefix = "> " if selected else "  "
-            o.text(prefix + item, WIDTH / 2 - 90, 330 + i * 52, size=30, color=color)
-        life = self.profile["lifetime"]
+            o.text(prefix + item, WIDTH / 2 - 90, 330 + i * 48, size=28, color=color)
+
+        life = self.section["lifetime"]
         o.text(f"BEST {life['best_score']:07d}", WIDTH / 2, 640, size=18,
                color=GOLD, center=True)
-        unlocked = len(self.profile["achievements"])
-        o.text(f"{unlocked}/{len(ACHIEVEMENTS)} achievements  |  "
-               f"{len(self.profile['unlocked_skins'])}/{len(SKINS)} ships",
+        unlocked = len(self.section["achievements"])
+        o.text(f"{unlocked}/{len(self.game.ACHIEVEMENTS)} achievements",
                WIDTH / 2, 670, size=14, color=DIM, center=True)
-        o.text("C: CRT filter   M: music   Esc: quit",
+        o.text("Left/Right: game   C: CRT   M: music   Esc: quit",
                WIDTH / 2, HEIGHT - 40, size=14, color=DIM, center=True)
-        self.draw_toasts()
+        self.draw_banner_and_toasts()
 
-    def draw_skins(self):
+    def draw_mode_select(self):
         o = self.renderer.overlay
-        skin_id = SKIN_ORDER[self.skin_index]
-        skin = SKINS[skin_id]
-        unlocked = skin_id in self.profile["unlocked_skins"]
-        selected = skin_id == self.profile["selected_skin"]
+        o.text(self.game.INFO.name, WIDTH / 2, 160, size=40, color=GREEN,
+               center=True)
+        o.text("SELECT MODE", WIDTH / 2, 260, size=22, color=DIM, center=True)
+        for i, (mode_id, label) in enumerate(self.game.INFO.modes):
+            selected = i == self.mode_index
+            color = WHITE if selected else DIM
+            prefix = "> " if selected else "  "
+            o.text(prefix + label, WIDTH / 2 - 80, 340 + i * 52, size=30,
+                   color=color)
+        o.text("Esc: back", WIDTH / 2, HEIGHT - 40, size=14, color=DIM, center=True)
+
+    def draw_hangar(self):
+        o = self.renderer.overlay
+        module = self.game
+        skin_id = module.SKIN_ORDER[self.skin_index]
+        skin = module.SKINS[skin_id]
+        unlocked = skin_id in self.section["unlocked_skins"]
+        selected = skin_id == self.section["selected_skin"]
 
         o.text("HANGAR", WIDTH / 2, 90, size=44, color=GREEN, center=True)
         o.text(f"< {skin['name']} >", WIDTH / 2, 560, size=32,
                color=WHITE if unlocked else DIM, center=True)
         o.text(skin["desc"], WIDTH / 2, 610, size=16, color=DIM, center=True)
         if not unlocked:
-            from meta.achievements import BY_ID
-            req = BY_ID[skin["unlock"]]
+            req = next(a for a in module.ACHIEVEMENTS if a.id == skin["unlock"])
             o.text(f"LOCKED — {req.name}: {req.desc}", WIDTH / 2, 650, size=16,
                    color=RED, center=True)
         elif selected:
             o.text("[ EQUIPPED ]", WIDTH / 2, 650, size=18, color=GOLD, center=True)
         else:
-            o.text("Enter to equip", WIDTH / 2, 650, size=16, color=GREEN, center=True)
-        o.text(f"{self.skin_index + 1}/{len(SKIN_ORDER)}   Esc: back",
+            o.text("Enter to equip", WIDTH / 2, 650, size=16, color=GREEN,
+                   center=True)
+        o.text(f"{self.skin_index + 1}/{len(module.SKIN_ORDER)}   Esc: back",
                WIDTH / 2, HEIGHT - 40, size=14, color=DIM, center=True)
 
     def draw_achievements(self):
         o = self.renderer.overlay
-        o.text("ACHIEVEMENTS", WIDTH / 2, 60, size=40, color=GREEN, center=True)
+        module = self.game
+        engine = self.run_engine or self.engine_for_current_game()
+        o.text(f"{module.INFO.name} — ACHIEVEMENTS", WIDTH / 2, 55, size=32,
+               color=GREEN, center=True)
         col_w = 590
-        for i, a in enumerate(ACHIEVEMENTS):
+        run_stats = self.run.run_stats() if self.run else {}
+        for i, a in enumerate(module.ACHIEVEMENTS):
             col = i % 2
             row = i // 2
             x = 60 + col * col_w
-            y = 140 + row * 108
-            unlocked = self.engine.is_unlocked(a.id)
-            o.rect(x, y, col_w - 40, 92, (25, 30, 45, 200))
-            o.rect(x, y, 4, 92, GOLD if unlocked else (70, 70, 85, 255))
-            o.text(a.name, x + 18, y + 10, size=19,
+            y = 118 + row * 98
+            unlocked = engine.is_unlocked(a.id)
+            o.rect(x, y, col_w - 40, 84, (25, 30, 45, 200))
+            o.rect(x, y, 4, 84, GOLD if unlocked else (70, 70, 85, 255))
+            o.text(a.name, x + 18, y + 8, size=18,
                    color=GOLD if unlocked else WHITE)
-            o.text(a.desc, x + 18, y + 38, size=14, color=DIM)
+            o.text(a.desc, x + 18, y + 34, size=13, color=DIM)
             if unlocked:
-                o.text("UNLOCKED", x + col_w - 150, y + 10, size=13, color=GREEN)
+                o.text("UNLOCKED", x + col_w - 150, y + 8, size=13, color=GREEN)
             elif a.progress is not None:
-                cur, target = a.progress(self.profile["lifetime"],
-                                         self.world.stats if self.world else
-                                         {"grazes": 0, "powerups": 0})
+                try:
+                    cur, target = a.progress(self.section["lifetime"], run_stats)
+                except (KeyError, TypeError):
+                    cur, target = 0, 1
                 frac = min(1.0, cur / target)
-                o.rect(x + 18, y + 64, col_w - 90, 8, (45, 45, 65, 255))
-                o.rect(x + 18, y + 64, (col_w - 90) * frac, 8, CYAN)
-                o.text(f"{cur}/{target}", x + col_w - 130, y + 58, size=12, color=DIM)
-        o.text("Esc: back", WIDTH / 2, HEIGHT - 30, size=14, color=DIM, center=True)
+                o.rect(x + 18, y + 58, col_w - 90, 8, (45, 45, 65, 255))
+                o.rect(x + 18, y + 58, (col_w - 90) * frac, 8, CYAN)
+                o.text(f"{cur}/{target}", x + col_w - 130, y + 52, size=12,
+                       color=DIM)
+        o.text("Esc: back", WIDTH / 2, HEIGHT - 26, size=14, color=DIM, center=True)
 
     def draw_stats(self):
         o = self.renderer.overlay
-        life = self.profile["lifetime"]
-        o.text("SERVICE RECORD", WIDTH / 2, 70, size=40, color=GREEN, center=True)
+        life = self.section["lifetime"]
+        o.text(f"{self.game.INFO.name} — SERVICE RECORD", WIDTH / 2, 70,
+               size=32, color=GREEN, center=True)
         acc = (life["hits"] / life["shots"]) if life["shots"] else 0.0
         hours = life["playtime"] / 3600
         rows = [
@@ -523,32 +523,6 @@ class App:
             o.text(value, WIDTH / 2 + 120, y, size=20, color=WHITE)
         o.text("Esc: back", WIDTH / 2, HEIGHT - 30, size=14, color=DIM, center=True)
 
-    def draw_run_end(self):
-        o = self.renderer.overlay
-        s = self.run_summary
-        title = "VICTORY" if self.run_won else "SHOT DOWN"
-        color = GOLD if self.run_won else RED
-        o.text(title, WIDTH / 2, 150, size=64, color=color, center=True)
-        rows = [
-            ("Score", f"{s['score']:,}"),
-            ("Wave reached", f"{s['wave_reached']}"),
-            ("Enemies destroyed", f"{s['kills']}"),
-            ("Accuracy", f"{s['accuracy']:.0%}"),
-            ("Bullets grazed", f"{s['grazes']}"),
-            ("Max multiplier", f"x{s['max_multiplier']:.1f}"),
-            ("Power-ups", f"{s['powerups']}"),
-            ("Deaths", f"{s['deaths']}"),
-            ("Duration", f"{s['duration']:.0f}s"),
-        ]
-        for i, (label, value) in enumerate(rows):
-            y = 280 + i * 42
-            o.text(label, WIDTH / 2 - 220, y, size=20, color=DIM)
-            o.text(value, WIDTH / 2 + 120, y, size=20, color=WHITE)
-        if self.profile["lifetime"]["best_score"] <= s["score"] and s["score"] > 0:
-            o.text("NEW BEST!", WIDTH / 2, 240, size=22, color=GREEN, center=True)
-        o.text("Enter: menu", WIDTH / 2, HEIGHT - 60, size=18, color=GREEN, center=True)
-        self.draw_toasts()
-
     def draw_settings(self):
         o = self.renderer.overlay
         s = self.profile["settings"]
@@ -566,19 +540,38 @@ class App:
         o.text("Left/Right: change   Esc: back",
                WIDTH / 2, HEIGHT - 40, size=14, color=DIM, center=True)
 
+    def draw_run_end(self):
+        o = self.renderer.overlay
+        s = self.run_summary
+        title = "VICTORY" if self.run_won else "GAME OVER"
+        color = GOLD if self.run_won else RED
+        o.text(title, WIDTH / 2, 150, size=64, color=color, center=True)
+        shown = [(label, fmt.format(s[key])) for key, label, fmt in SUMMARY_ROWS
+                 if key in s and not (key == "loop" and s.get("loop", 1) <= 1)]
+        for i, (label, value) in enumerate(shown):
+            y = 280 + i * 42
+            o.text(label, WIDTH / 2 - 220, y, size=20, color=DIM)
+            o.text(value, WIDTH / 2 + 120, y, size=20, color=WHITE)
+        if self.section["lifetime"]["best_score"] <= s["score"] and s["score"] > 0:
+            o.text("NEW BEST!", WIDTH / 2, 240, size=22, color=GREEN, center=True)
+        o.text("Enter: menu", WIDTH / 2, HEIGHT - 60, size=18, color=GREEN,
+               center=True)
+        self.draw_banner_and_toasts()
+
+    def draw_paused(self):
+        o = self.renderer.overlay
+        o.rect(0, 0, WIDTH, HEIGHT, (5, 5, 12, 160))
+        o.text("PAUSED", WIDTH / 2, HEIGHT / 2 - 60, size=48, color=WHITE,
+               center=True)
+        o.text("Esc: resume    Q: quit to menu", WIDTH / 2, HEIGHT / 2 + 20,
+               size=20, color=DIM, center=True)
+
     def draw_fps(self):
         o = self.renderer.overlay
         o.text(f"{self.clock.get_fps():5.0f} FPS", WIDTH - 120, HEIGHT - 30,
                size=14, color=DIM)
 
-    def draw_paused(self):
-        o = self.renderer.overlay
-        o.rect(0, 0, WIDTH, HEIGHT, (5, 5, 12, 160))
-        o.text("PAUSED", WIDTH / 2, HEIGHT / 2 - 60, size=48, color=WHITE, center=True)
-        o.text("Esc: resume    Q: quit to menu", WIDTH / 2, HEIGHT / 2 + 20,
-               size=20, color=DIM, center=True)
-
-    # -------------------------------------------------------------------- loop
+    # ------------------------------------------------------------ mainloop
     def update_timers(self, dt):
         if self.wave_banner is not None:
             text, timer = self.wave_banner
@@ -588,7 +581,59 @@ class App:
             toast[1] -= dt
         self.toasts = [t for t in self.toasts if t[1] > 0]
 
-    def run(self):
+    def draw_3d_layer(self, dt, showcase_timer):
+        if self.state in (PLAYING, PAUSED, RUN_END) and self.run is not None:
+            self.run.draw(self.renderer, self.section)
+        elif self.state == MENU:
+            self.renderer.draw_menu_model(
+                self.game.INFO.showcase_sprite, 575, 265,
+                0.34 if self.game.INFO.showcase_sprite == "boss" else 0.5,
+                spin_speed=0.9)
+        elif self.state == HANGAR:
+            module = self.game
+            skin = module.SKINS[module.SKIN_ORDER[self.skin_index]]
+            unlocked = module.SKIN_ORDER[self.skin_index] in \
+                self.section["unlocked_skins"]
+            tint = (1.0, 1.0, 1.0, 1.0)
+            if not unlocked:
+                tint = (0.16, 0.16, 0.2, 1.0)
+            elif skin["special"] == "hue_cycle":
+                import colorsys
+                r, g, b = colorsys.hsv_to_rgb(
+                    (self.renderer.time * 0.18) % 1.0, 0.6, 1.0)
+                tint = (r * 1.35, g * 1.35, b * 1.35, 1.0)
+            elif skin["special"] == "translucent":
+                tint = (1.0, 1.0, 1.0, 0.55)
+            self.renderer.draw_menu_model(skin["sprite"], 320, 330, 0.55,
+                                          spin_speed=1.3, tint=tint)
+        else:
+            self.renderer.draw_starfield_only()
+
+    def draw_overlay_layer(self):
+        self.renderer.begin_overlay()
+        if self.state in (PLAYING, PAUSED):
+            self.run.draw_hud(self.renderer.overlay, WIDTH, HEIGHT, self.section)
+            self.draw_banner_and_toasts()
+            if self.state == PAUSED:
+                self.draw_paused()
+        elif self.state == MENU:
+            self.draw_menu()
+        elif self.state == MODE_SELECT:
+            self.draw_mode_select()
+        elif self.state == HANGAR:
+            self.draw_hangar()
+        elif self.state == ACHIEVEMENTS_SCREEN:
+            self.draw_achievements()
+        elif self.state == STATS_SCREEN:
+            self.draw_stats()
+        elif self.state == SETTINGS_SCREEN:
+            self.draw_settings()
+        elif self.state == RUN_END:
+            self.draw_run_end()
+        if self.profile["settings"].get("show_fps"):
+            self.draw_fps()
+
+    def run_forever(self):
         self.audio.music("menu")
         showcase_timer = 0.0
         while True:
@@ -601,71 +646,18 @@ class App:
                     self.handle_keydown(event.key)
 
             self.update_timers(dt)
-            crt = self.profile["settings"].get("crt", True)
-
             if self.state == PLAYING:
                 self.update_playing(dt)
 
             self.renderer.begin(dt if self.state != PAUSED else 0.0)
-
-            if self.state in (PLAYING, PAUSED, RUN_END):
-                if self.world is not None:
-                    self.renderer.draw_world(
-                        self.world, self.profile["selected_skin"])
-            elif self.state == MENU:
-                showcase_timer += dt
-                if showcase_timer > 6.0:
-                    showcase_timer = 0.0
-                    self.showcase_index = (self.showcase_index + 1) % len(SHOWCASE_SPRITES)
-                sprite = SHOWCASE_SPRITES[self.showcase_index]
-                scale = 0.34 if sprite == "boss" else 0.5
-                self.renderer.draw_menu_model(sprite, 575, 265, scale,
-                                              spin_speed=0.9)
-            elif self.state == SKINS_SCREEN:
-                skin_id = SKIN_ORDER[self.skin_index]
-                skin = SKINS[skin_id]
-                unlocked = skin_id in self.profile["unlocked_skins"]
-                tint = (1.0, 1.0, 1.0, 1.0)
-                if not unlocked:
-                    tint = (0.16, 0.16, 0.2, 1.0)
-                elif skin["special"] == "hue_cycle":
-                    import colorsys
-                    r, g, b = colorsys.hsv_to_rgb(
-                        (self.renderer.time * 0.18) % 1.0, 0.6, 1.0)
-                    tint = (r * 1.35, g * 1.35, b * 1.35, 1.0)
-                elif skin["special"] == "translucent":
-                    tint = (1.0, 1.0, 1.0, 0.55)
-                self.renderer.draw_menu_model(skin["sprite"], 320, 330, 0.55,
-                                              spin_speed=1.3, tint=tint)
-            else:
-                self.renderer.draw_starfield_only()
-
-            self.renderer.begin_overlay()
-            if self.state in (PLAYING, PAUSED):
-                self.draw_hud()
-                if self.state == PAUSED:
-                    self.draw_paused()
-            elif self.state == MENU:
-                self.draw_menu()
-            elif self.state == SKINS_SCREEN:
-                self.draw_skins()
-            elif self.state == ACHIEVEMENTS_SCREEN:
-                self.draw_achievements()
-            elif self.state == STATS_SCREEN:
-                self.draw_stats()
-            elif self.state == SETTINGS_SCREEN:
-                self.draw_settings()
-            elif self.state == RUN_END:
-                self.draw_run_end()
-            if self.profile["settings"].get("show_fps"):
-                self.draw_fps()
-
-            self.renderer.finish(crt=crt)
+            self.draw_3d_layer(dt, showcase_timer)
+            self.draw_overlay_layer()
+            self.renderer.finish(crt=self.profile["settings"].get("crt", True))
             pygame.display.flip()
 
 
 def main():
-    App().run()
+    App().run_forever()
 
 
 if __name__ == "__main__":

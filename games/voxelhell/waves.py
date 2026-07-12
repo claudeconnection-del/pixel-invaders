@@ -3,7 +3,7 @@
 Each wave is a list of enemy specs; the world instantiates them. Pattern
 factories are lambdas so every enemy gets its own pattern state.
 """
-from game.patterns import AimedBurst, RadialBurst, Spiral, WallVolley
+from games.voxelhell.patterns import AimedBurst, RadialBurst, Spiral, WallVolley
 
 ENEMY_STATS = {
     # kind: (hp, points, radius)
@@ -122,3 +122,62 @@ def build_boss_phases(rng):
 
 
 PHASE_THRESHOLDS = (2 / 3, 1 / 3)  # hp fractions where phase 2 and 3 begin
+
+ENDLESS_BOSS_EVERY = 5  # every Nth endless sector is a boss
+
+ENDLESS_NAMES = ["SECTOR SWEEP", "AMBUSH", "GAUNTLET", "ONSLAUGHT",
+                 "SWARM", "BLOCKADE", "INCURSION", "FLASHPOINT"]
+
+
+def endless_difficulty(index):
+    """Difficulty multiplier for endless sector `index` (0-based)."""
+    return min(3.0, 1.0 + index * 0.09)
+
+
+def build_endless_wave(rng, index):
+    """Procedural endless sector: 2-3 rows sampled from templates, pattern
+    parameters scaled by depth."""
+    d = endless_difficulty(index)
+
+    def aimed():
+        return [AimedBurst(interval=rng.uniform(2.0, 2.8), count=rng.choice([1, 1, 3]),
+                           spread_deg=14, speed=155, start_delay=rng.uniform(1.5, 2.5))]
+
+    def radial():
+        return [RadialBurst(interval=rng.uniform(3.0, 4.0), count=rng.choice([8, 10, 12]),
+                            speed=115, start_delay=rng.uniform(2.0, 3.5))]
+
+    def spiral():
+        return [Spiral(arms=2, rate=6, speed=115, omega_deg=rng.choice([75, -85]),
+                       start_delay=2.0)]
+
+    def wall():
+        return [WallVolley(interval=3.8, columns=13, speed=120, gap_cols=3,
+                           start_delay=2.2, rng=rng)]
+
+    # deeper sectors unlock nastier row archetypes
+    archetypes = [("octo", aimed), ("crab", aimed), ("crab", radial)]
+    if index >= 2:
+        archetypes += [("squid", aimed), ("squid", radial)]
+    if index >= 4:
+        archetypes += [("elite", spiral)]
+    if index >= 6:
+        archetypes += [("elite", wall)]
+
+    n_rows = 2 if index < 3 else 3
+    rows = []
+    for row_i in range(n_rows):
+        kind, pattern_factory = rng.choice(archetypes)
+        count = min(9, (4 if kind == "elite" else 6) + index // 3)
+        if kind == "elite":
+            count = min(count, 4)
+        y = 95 + row_i * 78
+        side = rng.choice([0, -1, 1])
+        rows += _row(kind, count, y, pattern_factory,
+                     delay_base=row_i * 0.5, spawn_side=side)
+
+    return {
+        "name": f"{rng.choice(ENDLESS_NAMES)} {index + 1}",
+        "enemies": rows,
+        "difficulty": d,
+    }
