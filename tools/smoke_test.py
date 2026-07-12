@@ -123,6 +123,44 @@ def main():
     print(f"run end + persistence OK (runs={section['lifetime']['runs']}, "
           f"achievements={sorted(section['achievements'])})")
 
+    # initials entry -> leaderboard (score qualified since board is empty)
+    assert app.pending_board is not None, "score should qualify for empty board"
+    app.handle_keydown(pygame.K_RETURN)
+    assert app.state == game_main.INITIALS
+    render_frame()
+    app.handle_keydown(pygame.K_DOWN)     # cycle a letter
+    app.handle_keydown(pygame.K_RETURN)   # slot 2
+    app.handle_keydown(pygame.K_RETURN)   # slot 3
+    app.handle_keydown(pygame.K_RETURN)   # submit
+    assert app.state == game_main.LEADERBOARD
+    assert app.last_rank == 1
+    render_frame()
+    from meta.leaderboard import entries
+    board = entries(app.profile, "voxelhell", "campaign")
+    assert len(board) == 1 and board[0]["score"] > 0
+    app.handle_keydown(pygame.K_ESCAPE)
+    assert app.state == game_main.MENU
+    print(f"initials + leaderboard OK (entry={board[0]['name']} "
+          f"{board[0]['score']})")
+
+    # attract mode: idle in, keypress out, cycles between games on demo death
+    app.idle_timer = 999
+    for _ in range(3):
+        app.update_timers(dt)
+        app.idle_timer += dt
+        if app.state == game_main.MENU and app.idle_timer >= 15:
+            app.start_attract()
+        if app.state == game_main.ATTRACT:
+            app.update_attract(dt)
+        render_frame()
+    assert app.state == game_main.ATTRACT
+    for _ in range(120):
+        app.update_attract(dt)
+        render_frame()
+    app.handle_keydown(pygame.K_SPACE)
+    assert app.state == game_main.MENU
+    print("attract mode OK")
+
     pygame.quit()
     print("SMOKE TEST PASSED")
 

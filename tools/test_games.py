@@ -10,30 +10,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from game import events as ev  # noqa: E402
 from game.entities import InputState  # noqa: E402
-from games.breaker.world import BreakerWorld, PLAYING_STATE  # noqa: E402
-from games.serpent.world import (  # noqa: E402
-    SerpentWorld, DIRS, OPPOSITE, COLS, ROWS,
-)
+from games.breaker.bot import demo_bot as breaker_bot  # noqa: E402
+from games.breaker.world import BreakerWorld  # noqa: E402
+from games.serpent.bot import demo_bot as serpent_bot  # noqa: E402
+from games.serpent.world import SerpentWorld  # noqa: E402
 
 DT = 1 / 60
-
-
-# ------------------------------------------------------------------ breaker
-def breaker_bot(world):
-    """Follow the most-dangerous descending ball; hold fire for lasers."""
-    inp = InputState(fire=True)
-    falling = [b for b in world.balls if b.vy > 0]
-    target = None
-    if falling:
-        target = min(falling, key=lambda b: (world.paddle_y - b.y))
-    elif world.balls:
-        target = world.balls[0]
-    tx = target.x if target else 320
-    if tx < world.paddle_x - 8:
-        inp.left = True
-    elif tx > world.paddle_x + 8:
-        inp.right = True
-    return inp
 
 
 def run_breaker():
@@ -75,35 +57,6 @@ def run_breaker():
 
 
 # ------------------------------------------------------------------ serpent
-def serpent_bot(world):
-    """Greedy chase with 1-step survival lookahead."""
-    head = world.body[0]
-    fruit = world.fruit
-    deadly = set(world.body[:-1]) | world.obstacles
-
-    def safe(direction):
-        dx, dy = DIRS[direction]
-        nxt = (head[0] + dx, head[1] + dy)
-        return (0 <= nxt[0] < COLS and 0 <= nxt[1] < ROWS
-                and nxt not in deadly)
-
-    prefs = []
-    if fruit:
-        if fruit[0] > head[0]:
-            prefs.append("right")
-        elif fruit[0] < head[0]:
-            prefs.append("left")
-        if fruit[1] > head[1]:
-            prefs.append("down")
-        elif fruit[1] < head[1]:
-            prefs.append("up")
-    prefs += ["up", "left", "down", "right"]
-    for d in prefs:
-        if d != OPPOSITE[world.direction] and safe(d):
-            return InputState(**{d: True})
-    return InputState()
-
-
 def run_serpent():
     world = SerpentWorld(rng=random.Random(1))
     frames = 0

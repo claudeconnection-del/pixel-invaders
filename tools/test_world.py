@@ -12,42 +12,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from game import events as ev  # noqa: E402
 from game.entities import InputState  # noqa: E402
+from games.voxelhell.bot import demo_bot as dodge_bot_input  # noqa: E402
 from games.voxelhell.world import World, LOST  # noqa: E402
 
 DT = 1 / 60
-
-
-def dodge_bot_input(world):
-    """Cheap bot: dodge only bullets predicted to hit within ~0.7s,
-    otherwise line up under the nearest target. Always firing."""
-    inp = InputState(fire=True)
-    p = world.player
-    danger = None
-    for b in world.enemy_bullets:
-        if b.vy <= 10:
-            continue
-        t_impact = (p.y - b.y) / b.vy
-        if not (0 <= t_impact <= 0.7):
-            continue
-        x_at_impact = b.x + b.vx * t_impact
-        if abs(x_at_impact - p.x) < 26:
-            if danger is None or t_impact < danger[0]:
-                danger = (t_impact, x_at_impact)
-    if danger is not None:
-        if danger[1] >= p.x:
-            inp.left = True
-        else:
-            inp.right = True
-        return inp
-    targets = world.enemies or ([world.boss] if world.boss and world.boss.alive else [])
-    targets = [t for t in targets if t.y > -20]  # ignore not-yet-entered enemies
-    if targets:
-        tx = min(targets, key=lambda e: abs(e.x - p.x)).x
-        if tx < p.x - 8:
-            inp.left = True
-        elif tx > p.x + 8:
-            inp.right = True
-    return inp
 
 
 def run_campaign_loops():

@@ -6,6 +6,7 @@ Cabinet controls:
     Esc - pause / back                   C - CRT filter, M - music
 Game controls are per-game (Voxel Hell: Space fire, Shift focus).
 """
+import math
 import random
 import sys
 
@@ -15,11 +16,14 @@ from game import events as ev
 from game.assets import AudioBank
 from game.entities import InputState
 from games import load_games, GAME_IDS
+from meta import leaderboard as lb
 from meta import profile as profile_mod
 from meta.achievements import AchievementEngine
 from meta.stats import StatsTracker
 
 WIDTH, HEIGHT = 1280, 860
+ATTRACT_IDLE_SECONDS = 15.0
+INITIALS_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
 
 # app states
 MENU = "menu"
@@ -31,6 +35,9 @@ SETTINGS_SCREEN = "settings"
 PLAYING = "playing"
 PAUSED = "paused"
 RUN_END = "run_end"
+INITIALS = "initials"
+LEADERBOARD = "leaderboard"
+ATTRACT = "attract"
 
 GREEN = (140, 255, 170, 255)
 DIM = (150, 150, 165, 255)
@@ -39,7 +46,8 @@ GOLD = (250, 220, 90, 255)
 RED = (255, 110, 100, 255)
 CYAN = (140, 235, 255, 255)
 
-MENU_ITEMS = ["PLAY", "HANGAR", "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
+MENU_ITEMS = ["PLAY", "HANGAR", "SCORES", "ACHIEVEMENTS", "STATS", "SETTINGS",
+              "QUIT"]
 
 # (label, settings key, choices) — Left/Right cycles; floats step by 0.1
 SETTINGS_ROWS = [
@@ -104,6 +112,13 @@ class App:
         gid = self.profile.get("selected_game", GAME_IDS[0])
         self.game_id = gid if gid in self.games else GAME_IDS[0]
 
+        pygame.joystick.init()
+        self.joysticks = {}
+        for i in range(pygame.joystick.get_count()):
+            stick = pygame.joystick.Joystick(i)
+            self.joysticks[stick.get_instance_id()] = stick
+        self.pad_nav_cooldown = 0.0
+
         self.state = MENU
         self.menu_index = 0
         self.mode_index = 0
@@ -114,9 +129,25 @@ class App:
         self.run_engine = None
         self.run_summary = None
         self.run_won = False
+        self.run_mode = None
         self.toasts = []          # [[Achievement, timer], ...]
         self.wave_banner = None   # (text, timer)
         self.showcase_index = 0
+
+        # arcade presentation
+        self.idle_timer = 0.0
+        self.attract_index = -1
+        self.attract_run = None
+        self.attract_gid = None
+        self.initials = list(self.profile["settings"].get("player_name", "AAA"))
+        self.initials_slot = 0
+        self.pending_board = None    # (game_id, mode, score, extra) awaiting initials
+        self.last_rank = None
+        self.board_mode_index = 0
+        self.kiosk = "--kiosk" in sys.argv
+        if self.kiosk and not self.profile["settings"].get("fullscreen"):
+            self.profile["settings"]["fullscreen"] = True
+            self.apply_display_settings()
 
     # ----------------------------------------------------------- accessors
     @property
@@ -185,6 +216,49 @@ class App:
     # --------------------------------------------------------------- input
     def handle_keydown(self, key):
         audio = self.audio
+        self.idle_timer = 0.0
+
+        if self.state == ATTRACT:
+            self.stop_attract()
+            return
+
+        if self.state == INITIALS:
+            if key in (pygame.K_UP, pygame.K_w):
+                self._cycle_initial(-1)
+                audio.play("menu_move")
+            elif key in (pygame.K_DOWN, pygame.K_s):
+                self._cycle_initial(1)
+                audio.play("menu_move")
+            elif key in (pygame.K_LEFT, pygame.K_a):
+                self.initials_slot = max(0, self.initials_slot - 1)
+                audio.play("menu_move")
+            elif key in (pygame.K_RIGHT, pygame.K_d):
+                self.initials_slot = min(2, self.initials_slot + 1)
+                audio.play("menu_move")
+            elif key == pygame.K_RETURN:
+                if self.initials_slot < 2:
+                    self.initials_slot += 1
+                    audio.play("menu_move")
+                else:
+                    self._submit_initials()
+            elif key == pygame.K_ESCAPE:
+                self.pending_board = None
+                self.state = MENU
+                self.audio.music("menu")
+            return
+
+        if self.state == LEADERBOARD:
+            modes = self.game.INFO.modes
+            if key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d) \
+                    and len(modes) > 1:
+                self.board_mode_index = (self.board_mode_index + 1) % len(modes)
+                audio.play("menu_move")
+            elif key in (pygame.K_ESCAPE, pygame.K_RETURN):
+                self.last_rank = None
+                self.state = MENU
+                self.audio.music("menu")
+            return
+
         if self.state == MENU:
             if key in (pygame.K_LEFT, pygame.K_a):
                 self.cycle_game(-1)
@@ -268,8 +342,14 @@ class App:
 
         elif self.state == RUN_END:
             if key == pygame.K_RETURN:
-                self.state = MENU
-                self.audio.music("menu")
+                if self.pending_board is not None:
+                    self.initials = list(
+                        (self.profile["settings"].get("player_name", "AAA") + "AAA")[:3])
+                    self.initials_slot = 0
+                    self.state = INITIALS
+                else:
+                    self.state = MENU
+                    self.audio.music("menu")
 
         # global toggles
         if key == pygame.K_c and self.state != SETTINGS_SCREEN:
@@ -303,6 +383,9 @@ class App:
                 selected = self.section["selected_skin"]
                 self.skin_index = order.index(selected) if selected in order else 0
                 self.state = HANGAR
+        elif choice == "SCORES":
+            self.board_mode_index = 0
+            self.state = LEADERBOARD
         elif choice == "ACHIEVEMENTS":
             self.state = ACHIEVEMENTS_SCREEN
         elif choice == "STATS":
@@ -315,13 +398,64 @@ class App:
     # ---------------------------------------------------------------- runs
     def start_run(self, mode):
         self.run = self.game.create_run(mode, random.Random())
+        self.run_mode = mode
         self.run_stats_tracker = StatsTracker(self.section)
         self.run_engine = self.engine_for_current_game()
         self.run_summary = None
+        self.pending_board = None
         self.toasts.clear()
         self.wave_banner = None
         self.state = PLAYING
         self.audio.music("game")
+
+    # ------------------------------------------------------------- initials
+    def _cycle_initial(self, direction):
+        ch = self.initials[self.initials_slot]
+        idx = INITIALS_CHARS.find(ch)
+        self.initials[self.initials_slot] = \
+            INITIALS_CHARS[(idx + direction) % len(INITIALS_CHARS)]
+
+    def _submit_initials(self):
+        game_id, mode, score, extra = self.pending_board
+        name = "".join(self.initials).strip() or "AAA"
+        self.profile["settings"]["player_name"] = "".join(self.initials)
+        self.last_rank = lb.submit(self.profile, game_id, mode, name, score, extra)
+        self.pending_board = None
+        self.board_mode_index = next(
+            (i for i, (m, _) in enumerate(self.game.INFO.modes) if m == mode), 0)
+        self.save_profile()
+        self.audio.play("toast")
+        self.state = LEADERBOARD
+
+    # -------------------------------------------------------------- attract
+    def start_attract(self):
+        self.attract_index = (self.attract_index + 1) % len(GAME_IDS)
+        gid = GAME_IDS[self.attract_index]
+        self.attract_gid = gid
+        self.attract_run = self.games[gid].create_run(
+            self.games[gid].INFO.modes[0][0], random.Random())
+        self.state = ATTRACT
+        self.wave_banner = None
+        self.audio.music(None)
+
+    def stop_attract(self):
+        self.attract_run = None
+        self.idle_timer = 0.0
+        self.state = MENU
+        self.audio.music("menu")
+        self.audio.play("menu_select")
+
+    def update_attract(self, dt):
+        run = self.attract_run
+        module = self.games[self.attract_gid]
+        run.update(dt, module.demo_bot(run.world))
+        # effects only — attract demos never touch stats or achievements
+        for etype, data in run.drain_events():
+            run.on_event(etype, data, self.renderer, self.audio, self.post_banner)
+        if hasattr(run, "per_frame_particles"):
+            run.per_frame_particles(self.renderer, random)
+        if run.run_over:
+            self.start_attract()
 
     def abandon_run(self):
         """Quit to menu mid-run: counts stats so far as an unfinished run."""
@@ -338,16 +472,86 @@ class App:
         pygame.quit()
         sys.exit(0)
 
+    # ------------------------------------------------------------- gamepad
+    def _pad(self):
+        return next(iter(self.joysticks.values()), None)
+
+    def pad_state(self):
+        """(dx, dy, fire, focus) from the first connected controller.
+        Assumes the common SDL/Xbox layout: left stick axes 0/1, hat 0
+        d-pad, A(0)=fire, LB/RB(4/5) or triggers=focus."""
+        pad = self._pad()
+        if pad is None:
+            return 0.0, 0.0, False, False
+        try:
+            dx = pad.get_axis(0) if pad.get_numaxes() > 0 else 0.0
+            dy = pad.get_axis(1) if pad.get_numaxes() > 1 else 0.0
+            if pad.get_numhats() > 0:
+                hx, hy = pad.get_hat(0)
+                dx = hx or dx
+                dy = -hy or dy
+            nbuttons = pad.get_numbuttons()
+            fire = nbuttons > 0 and pad.get_button(0)
+            focus = ((nbuttons > 4 and pad.get_button(4))
+                     or (nbuttons > 5 and pad.get_button(5)))
+            if not focus and pad.get_numaxes() > 5:
+                focus = pad.get_axis(4) > 0.0 or pad.get_axis(5) > 0.0
+            return dx, dy, bool(fire), bool(focus)
+        except pygame.error:
+            return 0.0, 0.0, False, False
+
+    def handle_pad_button(self, button):
+        """Map controller buttons to the keyboard actions per state."""
+        self.idle_timer = 0.0
+        if self.state == ATTRACT:
+            self.stop_attract()
+            return
+        in_game = self.state in (PLAYING, PAUSED)
+        if button == 0:      # A: confirm (fire is polled separately in-game)
+            if not in_game:
+                self.handle_keydown(pygame.K_RETURN)
+        elif button == 1:    # B: back / resume
+            if self.state != PLAYING:
+                self.handle_keydown(pygame.K_ESCAPE)
+        elif button == 6:    # back/select: quit to menu while paused
+            if self.state == PAUSED:
+                self.handle_keydown(pygame.K_q)
+        elif button == 7:    # start: pause / confirm
+            self.handle_keydown(
+                pygame.K_ESCAPE if in_game else pygame.K_RETURN)
+
+    def poll_pad_navigation(self, dt):
+        """Stick/d-pad moves menus like arrow keys, with repeat gating."""
+        if self.state in (PLAYING,):
+            return
+        self.pad_nav_cooldown = max(0.0, self.pad_nav_cooldown - dt)
+        dx, dy, _, _ = self.pad_state()
+        if self.pad_nav_cooldown > 0:
+            return
+        key = None
+        if dy < -0.5:
+            key = pygame.K_UP
+        elif dy > 0.5:
+            key = pygame.K_DOWN
+        elif dx < -0.5:
+            key = pygame.K_LEFT
+        elif dx > 0.5:
+            key = pygame.K_RIGHT
+        if key is not None:
+            self.handle_keydown(key)
+            self.pad_nav_cooldown = 0.22
+
     # ------------------------------------------------------------ gameplay
     def gameplay_input(self):
         keys = pygame.key.get_pressed()
+        pdx, pdy, pfire, pfocus = self.pad_state()
         return InputState(
-            left=keys[pygame.K_LEFT] or keys[pygame.K_a],
-            right=keys[pygame.K_RIGHT] or keys[pygame.K_d],
-            up=keys[pygame.K_UP] or keys[pygame.K_w],
-            down=keys[pygame.K_DOWN] or keys[pygame.K_s],
-            focus=keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT],
-            fire=keys[pygame.K_SPACE],
+            left=keys[pygame.K_LEFT] or keys[pygame.K_a] or pdx < -0.35,
+            right=keys[pygame.K_RIGHT] or keys[pygame.K_d] or pdx > 0.35,
+            up=keys[pygame.K_UP] or keys[pygame.K_w] or pdy < -0.35,
+            down=keys[pygame.K_DOWN] or keys[pygame.K_s] or pdy > 0.35,
+            focus=keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT] or pfocus,
+            fire=keys[pygame.K_SPACE] or pfire,
         )
 
     def post_banner(self, text, seconds):
@@ -376,6 +580,12 @@ class App:
         if self.run_summary is not None and self.state == PLAYING:
             self.state = RUN_END
             self.audio.music(None)
+            score = self.run_summary["score"]
+            if lb.qualifies(self.profile, self.game_id, self.run_mode, score):
+                extra = {}
+                if "wave_reached" in self.run_summary:
+                    extra["wave"] = self.run_summary["wave_reached"]
+                self.pending_board = (self.game_id, self.run_mode, score, extra)
             self.save_profile()
 
     # ------------------------------------------------------------ overlays
@@ -566,6 +776,65 @@ class App:
         o.text("Esc: resume    Q: quit to menu", WIDTH / 2, HEIGHT / 2 + 20,
                size=20, color=DIM, center=True)
 
+    def draw_initials(self):
+        o = self.renderer.overlay
+        _, _, score, _ = self.pending_board
+        o.text("HIGH SCORE!", WIDTH / 2, 180, size=52, color=GOLD, center=True)
+        o.text(f"{score:,}", WIDTH / 2, 260, size=30, color=WHITE, center=True)
+        o.text("ENTER YOUR INITIALS", WIDTH / 2, 340, size=20, color=DIM,
+               center=True)
+        for i, ch in enumerate(self.initials):
+            x = WIDTH / 2 - 90 + i * 90
+            selected = i == self.initials_slot
+            o.rect(x - 32, 400, 64, 84, (25, 30, 45, 230))
+            if selected:
+                o.rect(x - 32, 484, 64, 5, GOLD)
+                pulse = int(150 + 100 * abs(math.sin(self.renderer.time * 4)))
+                color = (255, 235, 140, pulse)
+            else:
+                color = WHITE
+            o.text(ch, x, 410, size=52, color=color, center=True)
+        o.text("Up/Down: letter   Left/Right: slot   Enter: confirm",
+               WIDTH / 2, 540, size=14, color=DIM, center=True)
+
+    def draw_leaderboard(self):
+        o = self.renderer.overlay
+        modes = self.game.INFO.modes
+        mode_id, mode_label = modes[self.board_mode_index % len(modes)]
+        o.text(f"{self.game.INFO.name} — HIGH SCORES", WIDTH / 2, 70, size=32,
+               color=GREEN, center=True)
+        tab = f"< {mode_label} >" if len(modes) > 1 else mode_label
+        o.text(tab, WIDTH / 2, 125, size=20, color=GOLD, center=True)
+
+        board = lb.entries(self.profile, self.game_id, mode_id)
+        if not board:
+            o.text("NO SCORES YET — GO SET ONE", WIDTH / 2, HEIGHT / 2,
+                   size=22, color=DIM, center=True)
+        for i, entry in enumerate(board):
+            y = 190 + i * 52
+            rank = i + 1
+            highlight = self.last_rank == rank
+            color = GOLD if highlight else (WHITE if rank <= 3 else DIM)
+            if highlight:
+                o.rect(WIDTH / 2 - 330, y - 6, 660, 42, (45, 40, 20, 180))
+            o.text(f"{rank:2d}", WIDTH / 2 - 300, y, size=24, color=color)
+            o.text(entry["name"], WIDTH / 2 - 220, y, size=24, color=color)
+            o.text(f"{entry['score']:,}", WIDTH / 2 + 40, y, size=24, color=color)
+            o.text(entry.get("date", ""), WIDTH / 2 + 220, y, size=16, color=DIM)
+        o.text("Esc: back", WIDTH / 2, HEIGHT - 30, size=14, color=DIM,
+               center=True)
+
+    def draw_attract_overlay(self):
+        o = self.renderer.overlay
+        module = self.games[self.attract_gid]
+        self.attract_run.draw_hud(o, WIDTH, HEIGHT, profile_mod.game_section(
+            self.profile, self.attract_gid))
+        if math.sin(self.renderer.time * 3) > -0.2:
+            o.text("PRESS ANY KEY", WIDTH / 2, HEIGHT * 0.62, size=36,
+                   color=WHITE, center=True)
+        o.text(f"DEMO — {module.INFO.name}", WIDTH / 2, HEIGHT - 44, size=16,
+               color=DIM, center=True)
+
     def draw_fps(self):
         o = self.renderer.overlay
         o.text(f"{self.clock.get_fps():5.0f} FPS", WIDTH - 120, HEIGHT - 30,
@@ -582,7 +851,11 @@ class App:
         self.toasts = [t for t in self.toasts if t[1] > 0]
 
     def draw_3d_layer(self, dt, showcase_timer):
-        if self.state in (PLAYING, PAUSED, RUN_END) and self.run is not None:
+        if self.state == ATTRACT and self.attract_run is not None:
+            self.attract_run.draw(self.renderer, profile_mod.game_section(
+                self.profile, self.attract_gid))
+        elif self.state in (PLAYING, PAUSED, RUN_END, INITIALS) \
+                and self.run is not None:
             self.run.draw(self.renderer, self.section)
         elif self.state == MENU:
             self.renderer.draw_menu_model(
@@ -630,12 +903,21 @@ class App:
             self.draw_settings()
         elif self.state == RUN_END:
             self.draw_run_end()
+        elif self.state == INITIALS:
+            self.draw_initials()
+        elif self.state == LEADERBOARD:
+            self.draw_leaderboard()
+        elif self.state == ATTRACT:
+            self.draw_attract_overlay()
         if self.profile["settings"].get("show_fps"):
             self.draw_fps()
 
     def run_forever(self):
         self.audio.music("menu")
         showcase_timer = 0.0
+        self.attract_run = None
+        if self.kiosk:
+            self.start_attract()
         while True:
             cap = self.profile["settings"].get("fps_cap", 120)
             dt = min(self.clock.tick(cap) / 1000.0, 0.05)
@@ -644,10 +926,24 @@ class App:
                     self.quit()
                 elif event.type == pygame.KEYDOWN:
                     self.handle_keydown(event.key)
+                elif event.type == pygame.JOYBUTTONDOWN:
+                    self.handle_pad_button(event.button)
+                elif event.type == pygame.JOYDEVICEADDED:
+                    stick = pygame.joystick.Joystick(event.device_index)
+                    self.joysticks[stick.get_instance_id()] = stick
+                elif event.type == pygame.JOYDEVICEREMOVED:
+                    self.joysticks.pop(event.instance_id, None)
 
+            self.poll_pad_navigation(dt)
             self.update_timers(dt)
             if self.state == PLAYING:
                 self.update_playing(dt)
+            elif self.state == ATTRACT:
+                self.update_attract(dt)
+            elif self.state == MENU:
+                self.idle_timer += dt
+                if self.idle_timer >= ATTRACT_IDLE_SECONDS:
+                    self.start_attract()
 
             self.renderer.begin(dt if self.state != PAUSED else 0.0)
             self.draw_3d_layer(dt, showcase_timer)
