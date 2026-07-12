@@ -11,7 +11,10 @@ services:
       context: .
       dockerfile: server/Dockerfile
     ports:
-      - "8083:8083"
+      # loopback only by default — safe on any machine. The Ubuntu box layers
+      # docker-compose.lan.yml on top (see the deploy job) to add its LAN bind;
+      # never publish on 0.0.0.0 (sshd stays the box's only wildcard listener).
+      - "127.0.0.1:8083:8083"
     volumes:
       - arcade-data:/data
     environment:
@@ -21,6 +24,9 @@ services:
       # require a key for score submissions (set the same key in the game
       # via the PIXEL_INVADERS_API_KEY env var):
       # ARCADE_API_KEY: "pick-something"
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
 
 volumes:

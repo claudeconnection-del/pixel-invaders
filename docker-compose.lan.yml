@@ -1,0 +1,8 @@
+# LAN-bind overlay for the Ubuntu box. Compose *appends* ports across files,
+# so this adds the LAN listener on top of the base file's loopback bind:
+#   docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d
+# Dev machines just use the base file and stay loopback-only.
+services:
+  arcade-api:
+    ports:
+      - "192.168.99.119:8083:8083"

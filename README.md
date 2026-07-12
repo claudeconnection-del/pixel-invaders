@@ -98,7 +98,7 @@ race now, let family beat your score after dinner. Sessions expire after 24h.
 - `POST /api/v1/scores` — validated score submission (optional `X-Api-Key`)
 - `GET /api/v1/scores?game=&mode=` — top N as JSON (CORS-enabled for your website)
 - `GET /scoreboard?game=&mode=` — **self-contained retro HTML scoreboard**, made to be
-  iframed into a family website: `<iframe src="http://your-box:8000/scoreboard?game=voxelhell&mode=campaign" width="500" height="640" frameborder="0"></iframe>`
+  iframed into a family website: `<iframe src="http://your-box:8083/scoreboard?game=voxelhell&mode=campaign" width="500" height="640" frameborder="0"></iframe>`
 - `GET /api/v1/daily` — deterministic daily seed (future daily-challenge mode)
 - `GET /healthz` — container healthcheck
 
@@ -116,7 +116,7 @@ Then, with [docker-compose.yml](docker-compose.yml) copied over (or the repo clo
 
 ```bash
 docker compose pull && docker compose up -d     # or: docker compose up -d --build
-curl http://localhost:8000/healthz
+curl http://localhost:8083/healthz
 ```
 
 Scores live in the `arcade-data` volume. Optional env: `ARCADE_API_KEY` (require a key for
@@ -125,7 +125,7 @@ submissions; set `PIXEL_INVADERS_API_KEY` in the game's environment to match) an
 
 ### Point the game at it
 
-Set `settings.server_url` in `profile.json` (e.g. `"http://ubuntu-box:8000"`) or the
+Set `settings.server_url` in `profile.json` (e.g. `"http://ubuntu-box:8083"`) or the
 `PIXEL_INVADERS_SERVER` env var. The SCORES screen gains a LOCAL/GLOBAL toggle and initials
 submissions upload automatically (with a global-rank toast).
 

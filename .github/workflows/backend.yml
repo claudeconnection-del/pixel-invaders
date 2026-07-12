@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "server/**"
+      - "docker-compose.yml"
+      - "docker-compose.lan.yml"
       - ".github/workflows/backend.yml"
   workflow_dispatch:
 
@@ -54,11 +56,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Redeploy the arcade service
+        # docker-compose.lan.yml adds the box's LAN bind on top of the base
+        # file's loopback-only publish (compose appends ports across files).
         run: |
-          docker compose pull
-          docker compose up -d
+          docker compose -f docker-compose.yml -f docker-compose.lan.yml pull
+          docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d
       - name: Smoke test the live deployment
         run: python3 server/deploy_smoke.py http://localhost:8083
+      - name: Sync the box's reference clone
+        # Keep ~/games/pixel-invaders (code + DEPLOY.md reference copy) in
+        # step with what just deployed, so on-box docs/compose never go stale.
+        # Fast-forward only: local edits are never clobbered, just warned about.
+        if: success()
+        run: |
+          REF="$HOME/games/pixel-invaders"
+          if [ -d "$REF/.git" ] \
+            && git -C "$REF" fetch "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" main \
+            && git -C "$REF" merge --ff-only FETCH_HEAD; then
+            echo "reference clone synced to $(git -C "$REF" rev-parse --short HEAD)"
+          else
+            echo "::warning::reference clone at $REF not fast-forwarded (missing, dirty, or diverged)"
+          fi
       - name: Prune old images
         if: success()
         run: docker image prune -f

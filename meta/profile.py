@@ -49,7 +49,7 @@ DEFAULT_PROFILE = {
         "show_fps": False,
         "game_music": "classic",  # classic | custom (Voxel Studio export)
         "player_name": "AAA",  # arcade initials
-        "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8000
+        "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8083
     },
 }
 
