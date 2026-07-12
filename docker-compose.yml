@@ -11,7 +11,7 @@ services:
       context: .
       dockerfile: server/Dockerfile
     ports:
-      - "8000:8083"
+      - "8083:8083"
     volumes:
       - arcade-data:/data
     environment:
