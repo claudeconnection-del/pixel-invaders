@@ -11,6 +11,7 @@ from OpenGL.GL import (
     glViewport, GL_DEPTH_TEST, GL_BLEND,
 )
 
+from game.theme import SCENE_CLEAR
 from render.gl import FBO, FullscreenTriangle, compile_program
 
 BRIGHT_FS = """
@@ -93,6 +94,8 @@ class PostPipeline:
         self.width = width
         self.height = height
         self.bloom_iterations = 2  # graphics setting: 0=off, 1=low, 2=full
+        # warm near-black backdrop (firelit room); a game may nudge it
+        self.clear_color = SCENE_CLEAR
         self.scene = FBO(width, height, depth=True)
         half_w, half_h = max(1, width // 2), max(1, height // 2)
         self.half = (half_w, half_h)
@@ -125,7 +128,7 @@ class PostPipeline:
     def begin_scene(self):
         self.scene.bind()
         glViewport(0, 0, self.width, self.height)
-        glClearColor(0.028, 0.028, 0.055, 1.0)
+        glClearColor(*self.clear_color, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
     def finish(self, time_s, aberration=0.0, crt=True):

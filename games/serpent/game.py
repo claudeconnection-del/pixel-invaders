@@ -3,6 +3,8 @@ import math
 
 from arcade.game_api import GameInfo, GameRun
 from game import events as ev
+from game import theme
+from game.theme import DIM, GOLD, EMBER
 from render.renderer import Batcher
 from render.voxel import quat_axis_angle
 
@@ -15,11 +17,9 @@ INFO = GameInfo(
     modes=[("arcade", "ARCADE")],
 )
 
-GREEN = (140, 255, 170, 255)
-DIM = (150, 150, 165, 255)
-WHITE = (235, 235, 240, 255)
-GOLD = (250, 220, 90, 255)
-CYAN = (140, 235, 255, 255)
+# Voxel Serpent's signature: garden Fern (accent) + Sage (accent2), Pine edge.
+_T = theme.for_game("serpent")
+ACCENT, ACCENT2 = _T.accent, _T.accent2
 
 
 class SerpentRun(GameRun):
@@ -79,7 +79,7 @@ class SerpentRun(GameRun):
 
         for cell in w.obstacles:
             fx, fy = field_pos(cell)
-            b.add("cube", fx, fy, CELL / 32 * 0.5, tint=(0.45, 0.45, 0.55, 1.0))
+            b.add("cube", fx, fy, CELL / 32 * 0.5, tint=(0.5, 0.44, 0.36, 1.0))
 
         n = len(w.body)
         for i, cell in enumerate(w.body):
@@ -104,20 +104,21 @@ class SerpentRun(GameRun):
                 b.add("bullet_orb", fx, fy, 0.17, quat=spin,
                       tint=(1.7, 0.6, 0.5, 1.0))
 
+        renderer.stud_color = _T.scene_studs()  # pine arena edge
         renderer.draw_scene(b)
 
     def per_frame_particles(self, renderer, rng):
         if not self.world.run_over and rng.random() < 0.3:
             fx, fy = field_pos(self.world.body[-1])
-            renderer.particles.glitter(fx, fy, color=(120, 220, 140))
+            renderer.particles.glitter(fx, fy, color=ACCENT2[:3])  # sage trail
 
     def draw_hud(self, o, width, height, section):
         w = self.world
         life = section["lifetime"]
-        o.text(f"SCORE {w.score:07d}", 26, 16, size=22, color=GREEN)
+        o.text(f"SCORE {w.score:07d}", 26, 16, size=22, color=EMBER)
         o.text(f"BEST  {max(life['best_score'], w.score):07d}", 26, 46,
                size=16, color=DIM)
-        o.text(f"LENGTH {w.length}", 26, 76, size=18, color=CYAN)
+        o.text(f"LENGTH {w.length}", 26, 76, size=18, color=ACCENT)
         o.text(f"GOLD {w.golds_eaten}", 26, 100, size=14, color=GOLD)
         o.text(f"{w.time:.0f}s", width - 120, 16, size=18, color=DIM)
 

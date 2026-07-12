@@ -3,6 +3,8 @@ import math
 
 from arcade.game_api import GameInfo, GameRun
 from game import events as ev
+from game import theme
+from game.theme import TEXT, DIM, GOLD, EMBER, DANGER
 from render.renderer import Batcher
 from render.voxel import quat_axis_angle
 
@@ -17,12 +19,10 @@ INFO = GameInfo(
 )
 INFO.mouse_aim = True
 
-GREEN = (140, 255, 170, 255)
-DIM = (150, 150, 165, 255)
-WHITE = (235, 235, 240, 255)
-GOLD = (250, 220, 90, 255)
-RED = (255, 110, 100, 255)
-CYAN = (140, 235, 255, 255)
+# Voxel Aim's signature: cool Frost (accent) + Cobalt (accent2) — the calm,
+# precise range. Warm ember targets pop against it.
+_T = theme.for_game("aimtrainer")
+ACCENT, ACCENT2 = _T.accent, _T.accent2
 
 CAMERA = ((0.0, 3.0, 7.5), (0.0, 3.0, 0.0), 56.0)
 
@@ -80,10 +80,10 @@ class AimRun(GameRun):
         for gx in range(-6, 7, 2):
             for gy in range(0, 7, 2):
                 b.add_world("cube", gx, gy, WALL_Z - 0.9, 0.12,
-                            tint=(0.18, 0.3, 0.38, 1.0))
+                            tint=(0.20, 0.28, 0.44, 1.0))
         for gx in range(-7, 8):
             b.add_world("cube", gx, -0.4, WALL_Z + 3.0, 0.5,
-                        tint=(0.1, 0.14, 0.2, 1.0))
+                        tint=(0.11, 0.15, 0.24, 1.0))
 
         # targets (projected for hit-testing after the draw)
         for target in self.world.targets:
@@ -110,21 +110,21 @@ class AimRun(GameRun):
     def draw_hud(self, o, width, height, section):
         w = self.world
         life = section["lifetime"]
-        o.text(f"SCORE {w.score:07d}", 26, 16, size=22, color=GREEN)
+        o.text(f"SCORE {w.score:07d}", 26, 16, size=22, color=EMBER)
         o.text(f"BEST  {max(life['best_score'], w.score):07d}", 26, 46,
                size=16, color=DIM)
         acc = (w.stats["hits"] / w.stats["shots"]) if w.stats["shots"] else 0
-        o.text(f"ACC {acc:.0%}", 26, 76, size=16, color=CYAN)
+        o.text(f"ACC {acc:.0%}", 26, 76, size=16, color=ACCENT)
         o.text(f"x{w.multiplier:.2f}", 26, 100, size=16, color=GOLD)
 
         # big timer
-        color = RED if w.time_left < 10 else WHITE
+        color = DANGER if w.time_left < 10 else TEXT
         o.text(f"{w.time_left:04.1f}", width / 2, 20, size=34, color=color,
                center=True)
 
         # crosshair (+ muzzle flash ring)
         ax, ay = self.aim
-        ch = GOLD if self.flash > 0.5 else GREEN
+        ch = GOLD if self.flash > 0.5 else ACCENT2  # cobalt rest, gold on fire
         o.rect(ax - 11, ay - 1, 8, 2, ch)
         o.rect(ax + 3, ay - 1, 8, 2, ch)
         o.rect(ax - 1, ay - 11, 2, 8, ch)

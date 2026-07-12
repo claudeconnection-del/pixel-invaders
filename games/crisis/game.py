@@ -3,6 +3,8 @@ import math
 
 from arcade.game_api import GameInfo, GameRun
 from game import events as ev
+from game import theme
+from game.theme import DIM, GOLD, EMBER, DANGER
 from render.renderer import Batcher
 from render.voxel import quat_axis_angle
 
@@ -18,12 +20,10 @@ INFO = GameInfo(
 )
 INFO.mouse_aim = True
 
-GREEN = (140, 255, 170, 255)
-DIM = (150, 150, 165, 255)
-WHITE = (235, 235, 240, 255)
-GOLD = (250, 220, 90, 255)
-RED = (255, 110, 100, 255)
-CYAN = (140, 235, 255, 255)
+# Voxel Crisis's signature: dusk Copper (accent) + Ember (accent2).
+_T = theme.for_game("crisis")
+ACCENT, ACCENT2 = _T.accent, _T.accent2
+PIP_EMPTY = (52, 42, 32, 255)  # spent armor/clip pip
 
 EXPLOSION_COLORS = [(120, 120, 130), (70, 110, 230), (250, 150, 60)]
 
@@ -111,7 +111,7 @@ class CrisisRun(GameRun):
             for gz in range(-32, 14, 2):
                 shade = 0.12 + 0.02 * ((gx + gz) % 4 == 0)
                 rows.append((gx, -1.0, gz, 2.0, 0, 0, 0, 1,
-                             shade, shade * 1.1, shade * 1.3, 1.0))
+                             shade * 1.25, shade * 1.05, shade * 0.82, 1.0))
         # cover crates at every enemy spot
         for stop in STAGE:
             for (x, z) in stop["spots"]:
@@ -169,28 +169,28 @@ class CrisisRun(GameRun):
 
     def draw_hud(self, o, width, height, section):
         w = self.world
-        o.text(f"SCORE {w.score:06d}", 26, 16, size=20, color=GREEN)
+        o.text(f"SCORE {w.score:06d}", 26, 16, size=20, color=EMBER)
         o.text(f"ZONE {max(1, w.stop_index + 1)}/{len(STAGE)}", 26, 44,
                size=14, color=DIM)
 
         # hp pips
         o.text("ARMOR", width - 240, 16, size=14, color=DIM)
         for i in range(PLAYER_HP):
-            color = RED if i < w.hp else (50, 50, 65, 255)
+            color = DANGER if i < w.hp else PIP_EMPTY
             o.rect(width - 170 + i * 26, 14, 18, 18, color)
 
         # clip
         o.text("CLIP", width - 240, 44, size=14, color=DIM)
         for i in range(CLIP_SIZE):
-            color = GOLD if i < w.clip else (50, 50, 65, 255)
+            color = GOLD if i < w.clip else PIP_EMPTY
             o.rect(width - 170 + i * 16, 46, 10, 16, color)
         if w.clip == 0 and not w.ducking:
             o.text("DUCK TO RELOAD!", width / 2, height * 0.62, size=22,
-                   color=RED, center=True)
+                   color=DANGER, center=True)
 
         # crosshair (dim while ducking)
         ax, ay = self.aim
-        ch = DIM if w.ducking else CYAN
+        ch = DIM if w.ducking else ACCENT
         o.rect(ax - 12, ay - 1, 9, 2, ch)
         o.rect(ax + 3, ay - 1, 9, 2, ch)
         o.rect(ax - 1, ay - 12, 2, 9, ch)
@@ -203,7 +203,7 @@ class CrisisRun(GameRun):
                    size=20, color=GOLD, center=True)
         if w.state == TRAVELING:
             o.text(">>> MOVING <<<", width / 2, height * 0.7, size=20,
-                   color=CYAN, center=True)
+                   color=ACCENT2, center=True)
 
         if w.hurt_flash > 0:
             o.rect(0, 0, width, height, (200, 30, 30, int(100 * w.hurt_flash)))
