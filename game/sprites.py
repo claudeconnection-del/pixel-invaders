@@ -256,6 +256,19 @@ POWERUP_SHIELD = [
     "..BB..",
 ]
 
+# ------------------------------------------------------------------ breaker
+PADDLE = [
+    "cCCCCCCCCc",
+    "CWWWWWWWWC",
+    "cCCCCCCCCc",
+]
+
+BRICK = [
+    "WWWWWW",
+    "W####W",
+    "WWWWWW",
+]
+
 # -------------------------------------------------------------------- misc
 EXPLOSION = [
     "O.....O.",
@@ -297,5 +310,7 @@ ALL_SPRITES = {
     "powerup_spread": POWERUP_SPREAD,
     "powerup_rapid": POWERUP_RAPID,
     "powerup_shield": POWERUP_SHIELD,
+    "paddle": PADDLE,
+    "brick": BRICK,
     "explosion": EXPLOSION,
 }

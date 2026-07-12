@@ -25,6 +25,7 @@ def main():
     from game.entities import InputState
     from games import GAME_IDS
     from tools.test_world import dodge_bot_input
+    from tools.test_games import breaker_bot, serpent_bot
 
     # patch: hidden window instead of visible one (App sets GL attributes)
     real_set_mode = pygame.display.set_mode
@@ -68,20 +69,25 @@ def main():
         render_frame()
     print("settings adjustments OK")
 
-    # play both voxelhell modes with the bot
-    app.game_id = "voxelhell"
-    for mode in ("campaign", "endless"):
+    # play every game/mode with its bot through the real app
+    bots = {"voxelhell": dodge_bot_input, "breaker": breaker_bot,
+            "serpent": serpent_bot}
+    plans = [("voxelhell", "campaign"), ("voxelhell", "endless"),
+             ("breaker", "arcade"), ("serpent", "arcade")]
+    for gid, mode in plans:
+        app.game_id = gid
         app.state = game_main.MENU
         app.start_run(mode)
         assert app.state == game_main.PLAYING
+        bot_fn = bots[gid]
         for frame in range(60 * 15):
-            bot = dodge_bot_input(app.run.world)
+            bot = bot_fn(app.run.world)
             app.gameplay_input = lambda b=bot: b
             app.update_playing(dt)
             render_frame()
             if app.state == game_main.RUN_END:
                 break
-        print(f"voxelhell {mode} OK (state={app.state}, score={app.run.score})")
+        print(f"{gid} {mode} OK (state={app.state}, score={app.run.score})")
         # pause/resume then abandon cleanly
         if app.state == game_main.PLAYING:
             app.handle_keydown(pygame.K_ESCAPE)
@@ -92,6 +98,11 @@ def main():
             app.handle_keydown(pygame.K_ESCAPE)
             app.handle_keydown(pygame.K_q)
             assert app.state == game_main.MENU
+        elif app.state == game_main.RUN_END:
+            app.handle_keydown(pygame.K_RETURN)
+            assert app.state == game_main.MENU
+
+    app.game_id = "voxelhell"
 
     # force a loss -> run end screen renders, profile written
     app.start_run("campaign")
