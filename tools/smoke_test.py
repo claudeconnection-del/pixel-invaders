@@ -123,7 +123,50 @@ def main():
 
     app.game_id = "voxelhell"
 
+    # Voxel Studio: params, preview, sequence slots, export -> custom pool
+    import games.studio.game as studio_game
+    studio_game.USERMUSIC_DIR = os.path.join(_tmp, "usermusic")
+    import game.assets as assets_mod
+    assets_mod.USERMUSIC_DIR = studio_game.USERMUSIC_DIR
+
+    app.game_id = "studio"
+    app.state = game_main.MENU
+    app.start_run("studio")
+    assert app.state == game_main.PLAYING
+    run = app.run
+    assert run.section is not None, "attach_profile hook not called"
+    # walk every parameter row and adjust it
+    for i in range(len(studio_game.PARAM_ROWS)):
+        run.row = i
+        run.handle_key(pygame.K_RIGHT)
+        app.update_playing(dt)
+        render_frame()
+    run.handle_key(pygame.K_SPACE)   # bake + preview
+    for _ in range(10):
+        app.update_playing(dt)
+        render_frame()
+    for _ in range(4):               # build a 4-slot sequence
+        run.handle_key(pygame.K_RETURN)
+        app.update_playing(dt)
+    run.handle_key(pygame.K_e)       # export as custom soundtrack
+    app.update_playing(dt)
+    render_frame()
+
+    exported = sorted(os.listdir(studio_game.USERMUSIC_DIR))
+    assert len(exported) == 4, f"expected 4 exported sections: {exported}"
+    assert app.audio.prefer_custom and app.audio.pools.get("custom"), \
+        "custom pool not active after export"
+    assert app.audio._resolve("game") == "custom"
+    saved = profile_mod.game_section(app.profile, "studio")["sequence"]
+    assert len(saved) == 4, "sequence not persisted"
+    unlocked = set(profile_mod.game_section(app.profile, "studio")["achievements"])
+    assert {"first_bake", "arranger", "resident_composer"} <= unlocked, unlocked
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)   # exit studio to menu
+    print(f"voxel studio OK (exported={len(exported)}, achievements={sorted(unlocked)})")
+
     # force a loss -> run end screen renders, profile written
+    app.game_id = "voxelhell"
     app.start_run("campaign")
     app.run.world.player.lives = 1
     app.gameplay_input = lambda: InputState()

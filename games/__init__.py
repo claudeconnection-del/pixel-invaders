@@ -1,7 +1,7 @@
 """Cabinet game registry: every playable game, in carousel order."""
 import importlib
 
-GAME_IDS = ["voxelhell", "breaker", "serpent"]
+GAME_IDS = ["voxelhell", "breaker", "serpent", "studio"]
 
 
 def load_games():

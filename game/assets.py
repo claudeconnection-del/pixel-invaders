@@ -17,6 +17,7 @@ import pygame
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SFX_DIR = os.path.join(BASE_DIR, "assets", "sfx")
 MUSIC_DIR = os.path.join(BASE_DIR, "assets", "music")
+USERMUSIC_DIR = os.path.join(BASE_DIR, "usermusic")  # Voxel Studio exports
 
 MUSIC_END_EVENT = pygame.USEREVENT + 7
 
@@ -53,12 +54,9 @@ class AudioBank:
         self.current_pool = None
         self.recent = []          # last section paths, to avoid quick repeats
         self.rng = random.Random()
+        self.prefer_custom = False  # settings: play Studio exports in-game
 
-        # discover section pools by filename prefix: <pool>_<nn>.wav
-        self.pools = {}
-        for path in sorted(glob.glob(os.path.join(MUSIC_DIR, "*.wav"))):
-            pool = os.path.basename(path).rsplit("_", 1)[0]
-            self.pools.setdefault(pool, []).append(path)
+        self.refresh_pools()
 
         if self.enabled:
             pygame.mixer.set_num_channels(24)
@@ -71,6 +69,15 @@ class AudioBank:
                     self.sfx[name] = sound
                 except (pygame.error, FileNotFoundError):
                     pass
+
+    def refresh_pools(self):
+        """Discover section pools by filename prefix: <pool>_<nn>.wav.
+        Called again after Voxel Studio exports a new custom soundtrack."""
+        self.pools = {}
+        for directory in (MUSIC_DIR, USERMUSIC_DIR):
+            for path in sorted(glob.glob(os.path.join(directory, "*.wav"))):
+                pool = os.path.basename(path).rsplit("_", 1)[0]
+                self.pools.setdefault(pool, []).append(path)
 
     def play(self, name):
         sound = self.sfx.get(name)
@@ -97,9 +104,16 @@ class AudioBank:
             pygame.mixer.music.stop()
 
     # ---------------------------------------------------------- sequencer
+    def _resolve(self, pool):
+        """The 'game' pool swaps to the player's Studio export when the
+        Game music setting is CUSTOM and an export exists."""
+        if pool == "game" and self.prefer_custom and self.pools.get("custom"):
+            return "custom"
+        return pool
+
     def _pick(self, pool):
         """A section from the pool, avoiding the most recent picks."""
-        sections = self.pools.get(pool, [])
+        sections = self.pools.get(self._resolve(pool), [])
         if not sections:
             return None
         avoid = set(self.recent[-max(1, len(sections) // 2):])

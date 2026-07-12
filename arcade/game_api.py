@@ -14,13 +14,17 @@ simulation, its instance batches, its HUD, and its event->effect mapping.
 
 class GameInfo:
     def __init__(self, gid, name, tagline, showcase_sprite, modes,
-                 has_skins=False, hud_score_label="SCORE"):
+                 has_skins=False, has_scores=True, attract=True,
+                 game_music=True, hud_score_label="SCORE"):
         self.id = gid
         self.name = name
         self.tagline = tagline
         self.showcase_sprite = showcase_sprite
         self.modes = modes  # list of (mode_id, label)
         self.has_skins = has_skins
+        self.has_scores = has_scores  # shows SCORES menu / initials entry
+        self.attract = attract        # eligible for attract-mode demos
+        self.game_music = game_music  # cabinet plays the game pool while running
         self.hud_score_label = hud_score_label
 
 
@@ -56,3 +60,12 @@ class GameRun:
     def on_event(self, etype, data, renderer, audio, banner):
         """Game-specific effects for one event (particles/sfx/shake).
         banner(text, seconds) posts a center-screen announcement."""
+
+    # ------------------------------------------------------ optional hooks
+    # attach_profile(section, settings, save_cb): called right after
+    #     create_run when defined — gives tool-like modules (e.g. the music
+    #     studio) their profile section, the cabinet settings dict, and a
+    #     callback that persists the profile.
+    # handle_key(key) -> bool: raw keydowns forwarded while PLAYING (before
+    #     the cabinet's own handling, except Esc). Return True if consumed.
+    # per_frame_particles(renderer, rng): ambient per-frame effects.

@@ -3,4 +3,6 @@ __pycache__/
 *.pyc
 profile.json
 highscore.txt
+usermusic/
+arcade.db
 tools/_*.png

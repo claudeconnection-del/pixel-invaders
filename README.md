@@ -31,6 +31,14 @@ boss fights.
   levels that loop armored, multi-ball/wide/laser power-ups, 8 achievements.
 - **Voxel Serpent** — grid snake with a speed curve, rare gold fruit, obstacle walls that
   grow with your appetite, 6 achievements.
+- **Voxel Studio** — the cabinet's music workstation. Every property of the composition
+  engine is editable (tempo, chord progression, bass style, drum kit + fills, lead voice,
+  shimmer, bars, note density, melody seed), with live preview against a voxel equalizer.
+  Arrange baked sections into an 8-slot sequence and **export it as the actual in-game
+  soundtrack** (`Settings -> Game music: CUSTOM`, or it flips automatically on export).
+  Sequences persist in your profile; exports land in `usermusic/` as a `custom` music pool.
+
+![voxel studio](docs/screenshot_studio.png)
 
 Adding a game = one folder under `games/` implementing the small interface in
 [arcade/game_api.py](arcade/game_api.py) plus a registry line.

@@ -58,6 +58,7 @@ SETTINGS_ROWS = [
     ("Bloom", "bloom", ["off", "low", "full"]),
     ("Particles", "particles", ["low", "medium", "high"]),
     ("CRT filter", "crt", [True, False]),
+    ("Game music", "game_music", ["classic", "custom"]),
     ("Music volume", "music_vol", "float"),
     ("SFX volume", "sfx_vol", "float"),
     ("Show FPS", "show_fps", [False, True]),
@@ -108,6 +109,8 @@ class App:
         self.audio.music_on = self.profile["settings"].get("music", True)
         self.audio.set_volumes(self.profile["settings"]["sfx_vol"],
                                self.profile["settings"]["music_vol"])
+        self.audio.prefer_custom = \
+            self.profile["settings"].get("game_music") == "custom"
 
         self.games = load_games()
         gid = self.profile.get("selected_game", GAME_IDS[0])
@@ -217,6 +220,12 @@ class App:
             self.renderer.apply_quality(bloom=s["bloom"], particles=s["particles"])
         elif key in ("music_vol", "sfx_vol"):
             self.audio.set_volumes(s["sfx_vol"], s["music_vol"])
+        elif key == "game_music":
+            self.audio.refresh_pools()
+            self.audio.prefer_custom = s["game_music"] == "custom"
+            if self.audio.current_pool == "game":  # re-resolve immediately
+                self.audio.music(None)
+                self.audio.music("game")
         self.save_profile()
 
     # --------------------------------------------------------------- input
@@ -344,14 +353,17 @@ class App:
             if key == pygame.K_ESCAPE:
                 self.state = PAUSED
                 self.audio.music(None)
+            elif hasattr(self.run, "handle_key"):
+                self.run.handle_key(key)
 
         elif self.state == PAUSED:
             if key == pygame.K_ESCAPE:
                 self.state = PLAYING
-                boss = getattr(self.run.world, "boss", None)
-                fighting_boss = (boss is not None and boss.alive
-                                 and not self.run.run_over)
-                self.audio.music("boss" if fighting_boss else "game")
+                if self.game.INFO.game_music:
+                    boss = getattr(self.run.world, "boss", None)
+                    fighting_boss = (boss is not None and boss.alive
+                                     and not self.run.run_over)
+                    self.audio.music("boss" if fighting_boss else "game")
             elif key == pygame.K_q:
                 self.abandon_run()
 
@@ -399,8 +411,9 @@ class App:
                 self.skin_index = order.index(selected) if selected in order else 0
                 self.state = HANGAR
         elif choice == "SCORES":
-            self.board_mode_index = 0
-            self.state = LEADERBOARD
+            if self.game.INFO.has_scores:
+                self.board_mode_index = 0
+                self.state = LEADERBOARD
         elif choice == "ACHIEVEMENTS":
             self.state = ACHIEVEMENTS_SCREEN
         elif choice == "STATS":
@@ -413,6 +426,9 @@ class App:
     # ---------------------------------------------------------------- runs
     def start_run(self, mode):
         self.run = self.game.create_run(mode, random.Random())
+        if hasattr(self.run, "attach_profile"):
+            self.run.attach_profile(self.section, self.profile["settings"],
+                                    self.save_profile)
         self.run_mode = mode
         self.run_stats_tracker = StatsTracker(self.section)
         self.run_engine = self.engine_for_current_game()
@@ -421,7 +437,8 @@ class App:
         self.toasts.clear()
         self.wave_banner = None
         self.state = PLAYING
-        self.audio.music("game")
+        # tool modules (studio) manage their own audio; games get music
+        self.audio.music("game" if self.game.INFO.game_music else None)
 
     # ------------------------------------------------------------- initials
     def _cycle_initial(self, direction):
@@ -466,8 +483,11 @@ class App:
 
     # -------------------------------------------------------------- attract
     def start_attract(self):
-        self.attract_index = (self.attract_index + 1) % len(GAME_IDS)
-        gid = GAME_IDS[self.attract_index]
+        eligible = [g for g in GAME_IDS if self.games[g].INFO.attract]
+        if not eligible:
+            return
+        self.attract_index = (self.attract_index + 1) % len(eligible)
+        gid = eligible[self.attract_index]
         self.attract_gid = gid
         self.attract_run = self.games[gid].create_run(
             self.games[gid].INFO.modes[0][0], random.Random())
@@ -605,6 +625,10 @@ class App:
                 self.audio.music("boss")
             elif etype == ev.BOSS_KILLED:
                 self.audio.music("game")
+            elif etype == "studio_export":
+                self.audio.refresh_pools()
+                self.audio.prefer_custom = \
+                    self.profile["settings"].get("game_music") == "custom"
             elif etype == ev.RUN_END:
                 self.run_summary = data["summary"]
                 self.run_won = data["win"]
@@ -658,7 +682,8 @@ class App:
         o.text(info.tagline, WIDTH / 2, 240, size=16, color=DIM, center=True)
 
         items = [m for m in MENU_ITEMS
-                 if m != "HANGAR" or info.has_skins]
+                 if (m != "HANGAR" or info.has_skins)
+                 and (m != "SCORES" or info.has_scores)]
         if MENU_ITEMS[self.menu_index] not in items:
             self.menu_index = 0
         for i, item in enumerate(items):

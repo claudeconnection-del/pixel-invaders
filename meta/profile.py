@@ -46,6 +46,7 @@ DEFAULT_PROFILE = {
         "music_vol": 0.45,
         "sfx_vol": 1.0,
         "show_fps": False,
+        "game_music": "classic",  # classic | custom (Voxel Studio export)
         "player_name": "AAA",  # arcade initials
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8000
     },
