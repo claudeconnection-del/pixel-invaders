@@ -13,6 +13,7 @@ GRAVITY = 7.0  # world units / s^2, pulls -y
 class ParticleSystem:
     def __init__(self, rng=None):
         self.rng = rng or random.Random()
+        self.density = 1.0  # graphics setting: scales spawn counts
         self.pos = np.zeros((CAPACITY, 3), dtype=np.float32)
         self.vel = np.zeros((CAPACITY, 3), dtype=np.float32)
         self.color = np.zeros((CAPACITY, 4), dtype=np.float32)
@@ -42,6 +43,7 @@ class ParticleSystem:
     def burst(self, fx, fy, colors, count=40, speed=(2.0, 7.0), life=(0.4, 1.0),
               scale=(0.05, 0.16), emissive=1.6, gravity=1.0):
         """Explosion at field coords: cubes fly outward in 3D."""
+        count = max(1, int(count * self.density))
         idx = self._alloc(count)
         x, y, z = world_from_field(fx, fy)
         self.pos[idx] = (x, y, z)
@@ -70,6 +72,8 @@ class ParticleSystem:
 
     def exhaust(self, fx, fy, color=(120, 180, 255)):
         """Engine trail puff below the ship."""
+        if self.rng.random() > self.density:
+            return
         idx = self._alloc(2)
         x, y, z = world_from_field(fx, fy)
         for i in idx:
@@ -84,6 +88,8 @@ class ParticleSystem:
 
     def glitter(self, fx, fy, color=(180, 255, 190)):
         """Sparkle trail for falling power-ups."""
+        if self.rng.random() > self.density:
+            return
         idx = self._alloc(1)
         x, y, z = world_from_field(fx, fy)
         i = idx[0]

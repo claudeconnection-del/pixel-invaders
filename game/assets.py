@@ -42,6 +42,8 @@ class AudioBank:
         self.enabled = pygame.mixer.get_init() is not None
         self.music_on = True
         self.current_track = None
+        self.sfx_vol = 1.0
+        self.music_vol = 0.45
         if self.enabled:
             pygame.mixer.set_num_channels(24)
             for name, volume in SFX.items():
@@ -57,6 +59,14 @@ class AudioBank:
         sound = self.sfx.get(name)
         if sound is not None:
             sound.play()
+
+    def set_volumes(self, sfx_vol, music_vol):
+        self.sfx_vol = sfx_vol
+        self.music_vol = music_vol
+        for name, sound in self.sfx.items():
+            sound.set_volume(SFX[name] * sfx_vol)
+        if self.enabled:
+            pygame.mixer.music.set_volume(music_vol)
 
     def set_music_enabled(self, on):
         self.music_on = on
@@ -80,7 +90,7 @@ class AudioBank:
         if track is not None:
             try:
                 pygame.mixer.music.load(MUSIC[track])
-                pygame.mixer.music.set_volume(0.45)
+                pygame.mixer.music.set_volume(self.music_vol)
                 pygame.mixer.music.play(-1)
             except (pygame.error, FileNotFoundError):
                 pass

@@ -32,7 +32,18 @@ DEFAULT_PROFILE = {
     "settings": {
         "crt": True,
         "music": True,
+        "fps_cap": 120,        # 0 = unlimited
+        "vsync": True,
+        "fullscreen": False,
+        "bloom": "full",       # off | low | full
+        "particles": "high",   # low | medium | high
+        "music_vol": 0.45,
+        "sfx_vol": 1.0,
+        "show_fps": False,
+        "player_name": "AAA",  # arcade initials
+        "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8000
     },
+    "leaderboard": {},  # mode -> [{name, score, wave, loop, date}] local top 10
 }
 
 
@@ -54,7 +65,7 @@ def load(path=None):
     if not isinstance(saved, dict):
         return profile
     for key, value in saved.items():
-        if key in ("lifetime", "settings") and isinstance(value, dict):
+        if key in ("lifetime", "settings", "leaderboard") and isinstance(value, dict):
             profile[key].update(value)
         elif key in profile:
             profile[key] = value

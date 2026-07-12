@@ -29,6 +29,7 @@ MENU = "menu"
 SKINS_SCREEN = "skins"
 ACHIEVEMENTS_SCREEN = "achievements"
 STATS_SCREEN = "stats"
+SETTINGS_SCREEN = "settings"
 PLAYING = "playing"
 PAUSED = "paused"
 RUN_END = "run_end"
@@ -40,10 +41,34 @@ GOLD = (250, 220, 90, 255)
 RED = (255, 110, 100, 255)
 CYAN = (140, 235, 255, 255)
 
-MENU_ITEMS = ["PLAY", "SKINS", "ACHIEVEMENTS", "STATS", "QUIT"]
+MENU_ITEMS = ["PLAY", "SKINS", "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
 
 SHOWCASE_SPRITES = ["boss", "enemy_octo_a", "enemy_crab_a", "enemy_squid_a",
                     "enemy_elite_a"]
+
+# (label, settings key, choices) — Left/Right cycles; floats step by 0.1
+SETTINGS_ROWS = [
+    ("FPS cap", "fps_cap", [60, 120, 144, 240, 0]),
+    ("VSync", "vsync", [True, False]),
+    ("Fullscreen", "fullscreen", [False, True]),
+    ("Bloom", "bloom", ["off", "low", "full"]),
+    ("Particles", "particles", ["low", "medium", "high"]),
+    ("CRT filter", "crt", [True, False]),
+    ("Music volume", "music_vol", "float"),
+    ("SFX volume", "sfx_vol", "float"),
+    ("Show FPS", "show_fps", [False, True]),
+]
+DISPLAY_KEYS = {"vsync", "fullscreen"}  # need a window/context rebuild
+
+
+def settings_value_label(key, value):
+    if key == "fps_cap":
+        return "UNLIMITED" if value == 0 else str(value)
+    if isinstance(value, bool):
+        return "ON" if value else "OFF"
+    if isinstance(value, float):
+        return f"{int(round(value * 100))}%"
+    return str(value).upper()
 
 
 class App:
@@ -53,26 +78,23 @@ class App:
             pygame.mixer.init()
         except pygame.error:
             pass
-        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
-        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
-        pygame.display.gl_set_attribute(
-            pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
         pygame.display.set_caption("Pixel Invaders: Voxel Hell")
-        flags = pygame.OPENGL | pygame.DOUBLEBUF
-        pygame.display.set_mode((WIDTH, HEIGHT), flags, vsync=1)
         self.clock = pygame.time.Clock()
 
-        from render.renderer import Renderer  # needs live GL context
-        self.renderer = Renderer(WIDTH, HEIGHT)
+        self.profile = profile_mod.load()
+        self.renderer = None
+        self.apply_display_settings()
 
         self.audio = AudioBank()
-        self.profile = profile_mod.load()
         self.stats = StatsTracker(self.profile)
         self.engine = AchievementEngine(self.profile)
         self.audio.music_on = self.profile["settings"].get("music", True)
+        self.audio.set_volumes(self.profile["settings"]["sfx_vol"],
+                               self.profile["settings"]["music_vol"])
 
         self.state = MENU
         self.menu_index = 0
+        self.settings_index = 0
         self.skin_index = SKIN_ORDER.index(self.profile["selected_skin"])
         self.world = None
         self.run_summary = None
@@ -82,9 +104,55 @@ class App:
         self.graze_sfx_gate = 0.0
         self.showcase_index = 0
 
+    # ------------------------------------------------------------- display
+    def apply_display_settings(self):
+        """(Re)create the window + GL context from current settings. All GL
+        objects die with the context, so the Renderer is rebuilt too."""
+        s = self.profile["settings"]
+        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
+        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
+        pygame.display.gl_set_attribute(
+            pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
+        if sys.platform == "darwin":
+            # macOS only provides 3.2+ core contexts with the forward-compat bit
+            pygame.display.gl_set_attribute(
+                pygame.GL_CONTEXT_FORWARD_COMPATIBLE_FLAG, 1)
+        flags = pygame.OPENGL | pygame.DOUBLEBUF
+        size = (WIDTH, HEIGHT)
+        if s.get("fullscreen"):
+            flags |= pygame.FULLSCREEN
+            size = (0, 0)  # desktop resolution
+        pygame.display.set_mode(size, flags, vsync=1 if s.get("vsync", True) else 0)
+        out_w, out_h = pygame.display.get_window_size()
+
+        from render.renderer import Renderer  # needs live GL context
+        self.renderer = Renderer(WIDTH, HEIGHT, out_w, out_h)
+        self.renderer.apply_quality(bloom=s["bloom"], particles=s["particles"])
+
     # -------------------------------------------------------------- persistence
     def save_profile(self):
         profile_mod.save(self.profile)
+
+    # -------------------------------------------------------------- settings
+    def adjust_setting(self, index, direction):
+        label, key, choices = SETTINGS_ROWS[index]
+        s = self.profile["settings"]
+        if choices == "float":
+            s[key] = round(min(1.0, max(0.0, s[key] + 0.1 * direction)), 2)
+        else:
+            try:
+                i = choices.index(s[key])
+            except ValueError:
+                i = 0
+            s[key] = choices[(i + direction) % len(choices)]
+
+        if key in DISPLAY_KEYS:
+            self.apply_display_settings()
+        elif key in ("bloom", "particles"):
+            self.renderer.apply_quality(bloom=s["bloom"], particles=s["particles"])
+        elif key in ("music_vol", "sfx_vol"):
+            self.audio.set_volumes(s["sfx_vol"], s["music_vol"])
+        self.save_profile()
 
     # ------------------------------------------------------------------ events
     def handle_keydown(self, key):
@@ -107,6 +175,8 @@ class App:
                     self.state = ACHIEVEMENTS_SCREEN
                 elif choice == "STATS":
                     self.state = STATS_SCREEN
+                elif choice == "SETTINGS":
+                    self.state = SETTINGS_SCREEN
                 elif choice == "QUIT":
                     self.quit()
             elif key == pygame.K_ESCAPE:
@@ -131,6 +201,22 @@ class App:
         elif self.state in (ACHIEVEMENTS_SCREEN, STATS_SCREEN):
             if key == pygame.K_ESCAPE:
                 self.state = MENU
+
+        elif self.state == SETTINGS_SCREEN:
+            if key == pygame.K_ESCAPE:
+                self.save_profile()
+                self.state = MENU
+            elif key in (pygame.K_UP, pygame.K_w):
+                self.settings_index = (self.settings_index - 1) % len(SETTINGS_ROWS)
+                audio.play("menu_move")
+            elif key in (pygame.K_DOWN, pygame.K_s):
+                self.settings_index = (self.settings_index + 1) % len(SETTINGS_ROWS)
+                audio.play("menu_move")
+            elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d,
+                         pygame.K_RETURN):
+                direction = -1 if key in (pygame.K_LEFT, pygame.K_a) else 1
+                self.adjust_setting(self.settings_index, direction)
+                audio.play("menu_select")
 
         elif self.state == PLAYING:
             if key == pygame.K_ESCAPE:
@@ -463,6 +549,28 @@ class App:
         o.text("Enter: menu", WIDTH / 2, HEIGHT - 60, size=18, color=GREEN, center=True)
         self.draw_toasts()
 
+    def draw_settings(self):
+        o = self.renderer.overlay
+        s = self.profile["settings"]
+        o.text("SETTINGS", WIDTH / 2, 80, size=44, color=GREEN, center=True)
+        for i, (label, key, choices) in enumerate(SETTINGS_ROWS):
+            y = 190 + i * 52
+            selected = i == self.settings_index
+            color = WHITE if selected else DIM
+            prefix = "> " if selected else "  "
+            o.text(prefix + label, WIDTH / 2 - 330, y, size=24, color=color)
+            value = settings_value_label(key, s[key])
+            o.text(f"< {value} >" if selected else value,
+                   WIDTH / 2 + 160, y, size=24,
+                   color=GOLD if selected else DIM)
+        o.text("Left/Right: change   Esc: back",
+               WIDTH / 2, HEIGHT - 40, size=14, color=DIM, center=True)
+
+    def draw_fps(self):
+        o = self.renderer.overlay
+        o.text(f"{self.clock.get_fps():5.0f} FPS", WIDTH - 120, HEIGHT - 30,
+               size=14, color=DIM)
+
     def draw_paused(self):
         o = self.renderer.overlay
         o.rect(0, 0, WIDTH, HEIGHT, (5, 5, 12, 160))
@@ -484,7 +592,8 @@ class App:
         self.audio.music("menu")
         showcase_timer = 0.0
         while True:
-            dt = min(self.clock.tick(FPS) / 1000.0, 0.05)
+            cap = self.profile["settings"].get("fps_cap", 120)
+            dt = min(self.clock.tick(cap) / 1000.0, 0.05)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.quit()
@@ -544,8 +653,12 @@ class App:
                 self.draw_achievements()
             elif self.state == STATS_SCREEN:
                 self.draw_stats()
+            elif self.state == SETTINGS_SCREEN:
+                self.draw_settings()
             elif self.state == RUN_END:
                 self.draw_run_end()
+            if self.profile["settings"].get("show_fps"):
+                self.draw_fps()
 
             self.renderer.finish(crt=crt)
             pygame.display.flip()

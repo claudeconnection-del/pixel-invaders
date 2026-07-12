@@ -60,13 +60,15 @@ POWERUP_SPRITES = {
 
 
 class Renderer:
-    def __init__(self, width, height, rng=None):
+    def __init__(self, width, height, out_width=None, out_height=None, rng=None):
+        # width/height: internal render resolution (fixed HUD space);
+        # out_*: window size, letterboxed by the post pass.
         self.width = width
         self.height = height
         self.rng = rng or random.Random()
 
         self.shader = VoxelShader()
-        self.post = PostPipeline(width, height)
+        self.post = PostPipeline(width, height, out_width, out_height)
         self.overlay = OverlayRenderer(width, height)
         self.particles = ParticleSystem(self.rng)
 
@@ -103,6 +105,11 @@ class Renderer:
                 x, y, z = world_from_field(fx, fy)
                 studs.append((x, y, z, 0.055, 0, 0, 0, 1, 0.25, 0.75, 0.85, 0.5))
         self.wall_instances = np.asarray(studs, dtype=np.float32)
+
+    # ----------------------------------------------------------- settings
+    def apply_quality(self, bloom="full", particles="high"):
+        self.post.bloom_iterations = {"off": 0, "low": 1, "full": 2}[bloom]
+        self.particles.density = {"low": 0.35, "medium": 0.7, "high": 1.0}[particles]
 
     # ------------------------------------------------------------ effects
     def add_shake(self, amount):
