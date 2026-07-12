@@ -15,9 +15,9 @@ RUN useradd --create-home arcade \
 USER arcade
 
 ENV ARCADE_DB_PATH=/data/arcade.db
-EXPOSE 8000
+EXPOSE 8083
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8083/healthz', timeout=2)"
 
 CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000"]
