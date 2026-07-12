@@ -38,7 +38,8 @@ Two categories on the cabinet menu (Left/Right on the CATEGORY row):
 **FPS**
 - **Voxel Doom** — first-person dungeon shooter: three floors of instanced-voxel corridors,
   imps and gunners with line-of-sight AI, hitscan pistol (fists when dry), medkits and ammo,
-  a pixel gun viewmodel with bob/kick/muzzle flash. Turn with Left/Right, strafe with Shift.
+  a pixel gun viewmodel with bob/kick/muzzle flash. Mouse-look to turn, WASD to move and
+  strafe (arrows/right-stick also turn), and a proper metal soundtrack.
 - **Voxel Crisis** — on-rails cover shooter: the camera rides six zones, troopers pop from
   cover with telegraphed shots, **duck with Shift to dodge and reload** your 8-round clip,
   quick-kill bonuses, and the Dread Captain at the end. Mouse aim.

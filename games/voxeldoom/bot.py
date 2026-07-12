@@ -66,9 +66,9 @@ def demo_bot(world):
     bearing = math.atan2(steer_z - world.pz, steer_x - world.px)
     diff = (bearing - world.angle + math.pi) % math.tau - math.pi
     if diff > 0.1:
-        inp.right = True
+        inp.turn = 1.0
     elif diff < -0.1:
-        inp.left = True
+        inp.turn = -1.0
     dist_to_obj = math.hypot(target_pos[0] - world.px,
                              target_pos[1] - world.pz)
     melee = want_fire and world.ammo <= 0

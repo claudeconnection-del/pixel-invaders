@@ -21,27 +21,33 @@ USERMUSIC_DIR = os.path.join(BASE_DIR, "usermusic")  # Voxel Studio exports
 
 MUSIC_END_EVENT = pygame.USEREVENT + 7
 
-# name -> volume
+# name -> volume. Trimmed from earlier values so that cascading hits (a
+# wave of enemies dying at once) sum without peaking the output.
 SFX = {
-    "shoot": 0.16,
-    "explosion_enemy": 0.42,
-    "explosion_player": 0.6,
-    "explosion_big": 0.75,
-    "graze": 0.25,
-    "powerup": 0.5,
-    "shield_break": 0.55,
-    "boss_roar": 0.7,
-    "phase_sting": 0.6,
-    "toast": 0.55,
-    "menu_move": 0.35,
-    "menu_select": 0.45,
-    "game_over": 0.6,
-    "win": 0.6,
-    "step_0": 0.4,
-    "step_1": 0.4,
-    "step_2": 0.4,
-    "step_3": 0.4,
+    "shoot": 0.14,
+    "explosion_enemy": 0.32,
+    "explosion_player": 0.52,
+    "explosion_big": 0.6,
+    "graze": 0.22,
+    "powerup": 0.45,
+    "shield_break": 0.5,
+    "boss_roar": 0.65,
+    "phase_sting": 0.55,
+    "toast": 0.5,
+    "menu_move": 0.32,
+    "menu_select": 0.42,
+    "game_over": 0.55,
+    "win": 0.55,
+    "step_0": 0.36,
+    "step_1": 0.36,
+    "step_2": 0.36,
+    "step_3": 0.36,
 }
+
+# Per-name limiter defaults: don't retrigger the same effect faster than
+# GATE_MS apart, and never let more than VOICE_CAP copies of it overlap.
+GATE_MS = 32
+VOICE_CAP = 4
 
 
 class AudioBank:
@@ -55,6 +61,7 @@ class AudioBank:
         self.recent = []          # last section paths, to avoid quick repeats
         self.rng = random.Random()
         self.prefer_custom = False  # settings: play Studio exports in-game
+        self._last_play = {}      # sound name -> last-played tick (limiter)
 
         self.refresh_pools()
 
@@ -80,9 +87,22 @@ class AudioBank:
                 self.pools.setdefault(pool, []).append(path)
 
     def play(self, name):
+        """Play an effect through the limiter: a short per-name gate stops
+        machine-gun retriggers, and a concurrent-voice cap stops the same
+        sample from summing on top of itself and peaking the speakers."""
         sound = self.sfx.get(name)
-        if sound is not None:
-            sound.play()
+        if sound is None:
+            return
+        now = pygame.time.get_ticks()
+        if now - self._last_play.get(name, -10000) < GATE_MS:
+            return
+        try:
+            if sound.get_num_channels() >= VOICE_CAP:
+                return
+        except pygame.error:
+            pass
+        self._last_play[name] = now
+        sound.play()
 
     def set_volumes(self, sfx_vol, music_vol):
         self.sfx_vol = sfx_vol

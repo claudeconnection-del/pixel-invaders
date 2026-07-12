@@ -12,7 +12,8 @@ from game import events as ev
 CELL = 2.0
 PLAYER_RADIUS = 0.45
 MOVE_SPEED = 4.6
-TURN_SPEED = 2.7
+TURN_SPEED = 2.7          # keyboard/stick turn, radians/sec
+MOUSE_SENS = 0.0032       # mouse-look turn, radians per pixel of motion
 FIRE_DELAY = 0.28
 GUN_RANGE = 26.0
 GUN_DAMAGE = 1
@@ -229,19 +230,20 @@ class DoomWorld:
         self._check_exit()
 
     def _update_player(self, dt, inp):
-        turn = (1 if inp.right else 0) - (1 if inp.left else 0)
-        if inp.focus:  # strafe instead of turn
-            side = self.angle + math.pi / 2
-            dx = math.cos(side) * turn * MOVE_SPEED * dt
-            dz = math.sin(side) * turn * MOVE_SPEED * dt
-            self.px, self.pz = self._try_move(self.px, self.pz, dx, dz)
-        else:
-            self.angle += turn * TURN_SPEED * dt
+        # turn: arrows/right-stick (rate) + mouse-look (per-frame delta)
+        self.angle += inp.turn * TURN_SPEED * dt + inp.look_dx * MOUSE_SENS
 
         forward = (1 if inp.up else 0) - (1 if inp.down else 0)
-        if forward:
-            dx = math.cos(self.angle) * forward * MOVE_SPEED * dt
-            dz = math.sin(self.angle) * forward * MOVE_SPEED * dt
+        strafe = inp.strafe
+        if forward or strafe:
+            mag = math.hypot(forward, strafe)
+            if mag > 1.0:  # keep diagonal (forward+strafe) at walking speed
+                forward /= mag
+                strafe /= mag
+            cos_a, sin_a = math.cos(self.angle), math.sin(self.angle)
+            # forward = (cos, sin); strafe-right = 90deg CW = (-sin, cos)
+            dx = (cos_a * forward - sin_a * strafe) * MOVE_SPEED * dt
+            dz = (sin_a * forward + cos_a * strafe) * MOVE_SPEED * dt
             self.px, self.pz = self._try_move(self.px, self.pz, dx, dz)
 
         clicked = inp.fire and not self.prev_fire

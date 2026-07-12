@@ -468,7 +468,8 @@ class App:
                     boss = getattr(self.run.world, "boss", None)
                     fighting_boss = (boss is not None and boss.alive
                                      and not self.run.run_over)
-                    self.audio.music("boss" if fighting_boss else "game")
+                    self.audio.music("boss" if fighting_boss
+                                     else self.gameplay_music_pool())
             elif key == pygame.K_q:
                 self.abandon_run()
 
@@ -572,8 +573,16 @@ class App:
         self.toasts.clear()
         self.wave_banner = None
         self.state = PLAYING
-        # tool modules (studio) manage their own audio; games get music
-        self.audio.music("game" if self.game.INFO.game_music else None)
+        if self.game.INFO.mouse_look:
+            pygame.mouse.get_rel()  # flush menu motion so the camera doesn't snap
+        # tool modules (studio) manage their own audio; games get their pool
+        self.audio.music(self.gameplay_music_pool())
+
+    def gameplay_music_pool(self):
+        """The section pool for the running game ('game', 'metal', ... or
+        None for tool modules that manage their own audio)."""
+        info = self.game.INFO
+        return info.music_pool if info.game_music else None
 
     # ------------------------------------------------------------- initials
     def _cycle_initial(self, direction):
@@ -704,15 +713,19 @@ class App:
         return next(iter(self.joysticks.values()), None)
 
     def pad_state(self):
-        """(dx, dy, fire, focus) from the first connected controller.
-        Assumes the common SDL/Xbox layout: left stick axes 0/1, hat 0
-        d-pad, A(0)=fire, LB/RB(4/5) or triggers=focus."""
+        """(dx, dy, fire, focus, right_x) from the first connected controller.
+        Assumes the common SDL/Xbox layout: left stick axes 0/1, right stick
+        X axis 2, hat 0 d-pad, A(0)=fire, LB/RB(4/5) or triggers=focus."""
         pad = self._pad()
         if pad is None:
-            return 0.0, 0.0, False, False
+            return 0.0, 0.0, False, False, 0.0
         try:
-            dx = pad.get_axis(0) if pad.get_numaxes() > 0 else 0.0
-            dy = pad.get_axis(1) if pad.get_numaxes() > 1 else 0.0
+            n = pad.get_numaxes()
+            dx = pad.get_axis(0) if n > 0 else 0.0
+            dy = pad.get_axis(1) if n > 1 else 0.0
+            rx = pad.get_axis(2) if n > 2 else 0.0
+            if abs(rx) < 0.2:  # deadzone for the look stick
+                rx = 0.0
             if pad.get_numhats() > 0:
                 hx, hy = pad.get_hat(0)
                 dx = hx or dx
@@ -721,11 +734,11 @@ class App:
             fire = nbuttons > 0 and pad.get_button(0)
             focus = ((nbuttons > 4 and pad.get_button(4))
                      or (nbuttons > 5 and pad.get_button(5)))
-            if not focus and pad.get_numaxes() > 5:
+            if not focus and n > 5:
                 focus = pad.get_axis(4) > 0.0 or pad.get_axis(5) > 0.0
-            return dx, dy, bool(fire), bool(focus)
+            return dx, dy, bool(fire), bool(focus), rx
         except pygame.error:
-            return 0.0, 0.0, False, False
+            return 0.0, 0.0, False, False, 0.0
 
     def handle_pad_button(self, button):
         """Map controller buttons to the keyboard actions per state."""
@@ -752,7 +765,7 @@ class App:
         if self.state in (PLAYING,):
             return
         self.pad_nav_cooldown = max(0.0, self.pad_nav_cooldown - dt)
-        dx, dy, _, _ = self.pad_state()
+        dx, dy, _, _, _ = self.pad_state()
         if self.pad_nav_cooldown > 0:
             return
         key = None
@@ -778,9 +791,20 @@ class App:
 
     def gameplay_input(self):
         keys = pygame.key.get_pressed()
-        pdx, pdy, pfire, pfocus = self.pad_state()
+        pdx, pdy, pfire, pfocus, prx = self.pad_state()
         aim_x, aim_y = self.mouse_logical()
         mouse_fire = pygame.mouse.get_pressed()[0]
+        # relative mouse motion, consumed every frame; only applied by
+        # mouse-look games (grab is on for those)
+        rel_dx = pygame.mouse.get_rel()[0]
+        look_dx = rel_dx if self.game.INFO.mouse_look else 0.0
+
+        strafe = ((1 if keys[pygame.K_d] else 0)
+                  - (1 if keys[pygame.K_a] else 0))
+        if abs(pdx) > 0.35:
+            strafe = pdx
+        turn = ((1 if keys[pygame.K_RIGHT] else 0)
+                - (1 if keys[pygame.K_LEFT] else 0)) + prx
         return InputState(
             left=keys[pygame.K_LEFT] or keys[pygame.K_a] or pdx < -0.35,
             right=keys[pygame.K_RIGHT] or keys[pygame.K_d] or pdx > 0.35,
@@ -789,6 +813,7 @@ class App:
             focus=keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT] or pfocus,
             fire=keys[pygame.K_SPACE] or pfire or mouse_fire,
             aim_x=aim_x, aim_y=aim_y,
+            strafe=strafe, turn=max(-1.0, min(1.0, turn)), look_dx=look_dx,
         )
 
     def post_banner(self, text, seconds):
@@ -804,7 +829,7 @@ class App:
             if etype == ev.BOSS_SPAWN:
                 self.audio.music("boss")
             elif etype == ev.BOSS_KILLED:
-                self.audio.music("game")
+                self.audio.music(self.gameplay_music_pool())
             elif etype == "studio_export":
                 self.audio.refresh_pools()
                 self.audio.prefer_custom = \
@@ -1372,8 +1397,14 @@ class App:
                 if self.idle_timer >= ATTRACT_IDLE_SECONDS:
                     self.start_attract()
 
-            pygame.mouse.set_visible(
-                not (self.state == PLAYING and self.game.INFO.mouse_aim))
+            # cursor + mouse grab: FPS games hide the pointer while playing;
+            # mouse-look games (Doom) also grab so relative motion keeps
+            # coming and the cursor can't wander off the window
+            info = self.game.INFO
+            playing_fps = self.state == PLAYING and (info.mouse_aim
+                                                     or info.mouse_look)
+            pygame.mouse.set_visible(not playing_fps)
+            pygame.event.set_grab(self.state == PLAYING and info.mouse_look)
 
             self.renderer.begin(dt if self.state != PAUSED else 0.0)
             self.draw_3d_layer(dt, showcase_timer)

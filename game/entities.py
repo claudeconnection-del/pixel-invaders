@@ -22,6 +22,12 @@ class InputState:
     # the FPS games, ignored by the classics
     aim_x: float = 640.0
     aim_y: float = 430.0
+    # first-person movement (Voxel Doom): dedicated so A/D can strafe while
+    # the arrows/mouse turn — kept separate from left/right so the classics'
+    # controls are unaffected
+    strafe: float = 0.0     # -1 left .. +1 right (A/D + pad left-stick X)
+    turn: float = 0.0       # -1 .. +1 keyboard turn (arrows + pad right-stick)
+    look_dx: float = 0.0    # relative mouse X this frame (mouse-look games)
 
 
 @dataclass

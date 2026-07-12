@@ -15,7 +15,7 @@ simulation, its instance batches, its HUD, and its event->effect mapping.
 class GameInfo:
     def __init__(self, gid, name, tagline, showcase_sprite, modes,
                  has_skins=False, has_scores=True, attract=True,
-                 game_music=True, hud_score_label="SCORE"):
+                 game_music=True, music_pool="game", hud_score_label="SCORE"):
         self.id = gid
         self.name = name
         self.tagline = tagline
@@ -24,8 +24,10 @@ class GameInfo:
         self.has_skins = has_skins
         self.has_scores = has_scores  # shows SCORES menu / initials entry
         self.attract = attract        # eligible for attract-mode demos
-        self.game_music = game_music  # cabinet plays the game pool while running
-        self.mouse_aim = False        # FPS-style: hide cursor, aim with mouse
+        self.game_music = game_music  # cabinet plays music while running
+        self.music_pool = music_pool  # which section pool: "game" | "metal" | ...
+        self.mouse_aim = False        # FPS-style: absolute-cursor aim
+        self.mouse_look = False       # FPS-style: relative mouse turning (grab)
         self.hud_score_label = hud_score_label
 
 

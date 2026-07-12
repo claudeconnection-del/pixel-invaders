@@ -9,8 +9,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from game.composer import (  # noqa: E402
-    SectionSpec, build_section, chord_tones, concat, envelope, midi, mix,
-    noise, note_track, square_wave, sweep, write_wav, PROGRESSIONS, REST,
+    SectionSpec, build_section, chord_tones, concat, decay, drum_track,
+    envelope, midi, mix, noise, note_track, square_wave, sweep, write_wav,
+    PROGRESSIONS, REST,
 )
 
 BASE_DIR = os.path.join(os.path.dirname(__file__), "..")
@@ -19,6 +20,7 @@ MUSIC_DIR = os.path.join(BASE_DIR, "assets", "music")
 
 MUSIC_SEED = 20260711
 MENU_BPM = 90
+METAL_BPM = 176
 
 C5, E5, G5, G4, A2 = 72, 76, 79, 67, 45
 
@@ -61,6 +63,75 @@ BOSS_SECTIONS = [
                 drum_style="intense", lead_voice="square", shimmer=True,
                 rest_density=0.1, seed=103),
 ]
+
+
+# ------------------------------------------------------------------- metal
+# Riffs as semitone offsets from a low A (one note per bar), snapped to a
+# dark/phrygian/tritone feel. Chugged in 16ths as low power chords.
+METAL_RIFFS = [
+    [0, 0, 1, 0, 0, -2, 1, 0],       # A phrygian: b2 grind
+    [0, 0, 6, 0, 0, 6, 5, 3],        # tritone dread (Eb against A)
+    [0, -1, -2, -3, 0, -1, -2, -3],  # chromatic descent doom
+]
+# 16th-note kick/snare grids per bar, alternating heaviness
+METAL_DRUMS = [
+    "K.KKS.K.K.KKS.KK",   # driving double-kick
+    "KSKSKSKSKSKSKSKS",   # blast beat
+    "K.K.S.KKK.K.S.KK",   # d-beat gallop
+]
+METAL_ROOT = 33  # A1
+
+
+def _metal_chug(riff, bars, rng):
+    """Low palm-muted power-chord gallop in 16ths (root + fifth + octave)."""
+    sixteenth = 60 / METAL_BPM / 4
+    gallop = [2, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1]  # sums to 16 sixteenths
+    out = []
+    for bar in range(bars):
+        root = METAL_ROOT + riff[bar % len(riff)]
+        for i, dur in enumerate(gallop):
+            length = sixteenth * dur
+            ring = (i == len(gallop) - 1)  # let the last note breathe
+            power = mix(
+                decay(square_wave(midi(root), length, 0.22, duty=0.5),
+                      1.4 if ring else 3.2),
+                decay(square_wave(midi(root + 7), length, 0.15, duty=0.5),
+                      1.4 if ring else 3.2),
+                decay(square_wave(midi(root + 12), length, 0.08, duty=0.25),
+                      3.0),
+            )
+            out.extend(power)
+    return out
+
+
+def _metal_lead(riff, bars, rng):
+    """Sparse buzzy tritone/phrygian stabs two octaves up."""
+    eighth = 60 / METAL_BPM / 2
+    seq = []
+    for bar in range(bars):
+        base = riff[bar % len(riff)]
+        pattern = rng.choice([
+            [base, REST, base + 6, REST, base + 5, REST, base + 3, REST],
+            [base, base + 6, REST, base, REST, base + 1, REST, base],
+            [REST, base + 12, REST, base + 6, REST, base + 5, base + 3, REST],
+        ])
+        for m in pattern:
+            seq.append(REST if m is REST else METAL_ROOT + 24 + m)
+    return note_track(seq, eighth, 0.09, duty=0.125, decay_power=2.4)
+
+
+def build_metal_section(rng, bars=8):
+    """Heavy riff-driven section: chug guitar + blast drums + buzzy lead."""
+    riff = rng.choice(METAL_RIFFS)
+    drum_grid = rng.choice(METAL_DRUMS) * bars
+    sixteenth = 60 / METAL_BPM / 4
+    layers = [
+        _metal_chug(riff, bars, rng),
+        _metal_lead(riff, bars, rng),
+        drum_track(drum_grid, sixteenth, kick_amp=0.32, snare_amp=0.2,
+                   hat_amp=0.04),
+    ]
+    return envelope(mix(*layers), attack=0.002, release=0.004)
 
 
 def build_menu_section(rng, bars=4):
@@ -148,6 +219,9 @@ def main():
     rng = random.Random(MUSIC_SEED)
     for i in range(4):
         out(MUSIC_DIR, f"menu_{i:02d}.wav", build_menu_section(rng))
+    metal_rng = random.Random(MUSIC_SEED + 1)
+    for i in range(6):
+        out(MUSIC_DIR, f"metal_{i:02d}.wav", build_metal_section(metal_rng))
 
 
 if __name__ == "__main__":

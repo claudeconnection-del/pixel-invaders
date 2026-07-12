@@ -14,8 +14,9 @@ INFO = GameInfo(
     "Three floors down. Everything bites.",
     showcase_sprite="imp_a",
     modes=[("campaign", "CAMPAIGN")],
+    music_pool="metal",
 )
-INFO.mouse_aim = False  # classic tank controls; crosshair is centered
+INFO.mouse_look = True  # mouse turns; A/D strafe; crosshair centered
 
 GREEN = (140, 255, 170, 255)
 DIM = (150, 150, 165, 255)

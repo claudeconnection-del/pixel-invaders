@@ -156,6 +156,11 @@ PROGRESSIONS = {
     "F G Am": [(-4, False), (-2, False), (0, True), (0, True)] * 2,
     "Am Ab (boss)": [(0, True), (0, True), (-1, False), (-1, False)] * 2,
     "Am Dm Am G": [(0, True), (5, True), (0, True), (-2, False)] * 2,
+    # dark/heavy progressions (metal): phrygian b2, tritones, chromatic drops
+    "Phrygian (dark)": [(0, True), (0, True), (1, False), (0, True),
+                        (0, True), (-2, False), (1, False), (0, True)],
+    "Tritone (evil)": [(0, True), (0, True), (6, False), (0, True)] * 2,
+    "Chromatic Doom": [(0, True), (-1, False), (-2, False), (-3, False)] * 2,
 }
 PROGRESSION_NAMES = list(PROGRESSIONS.keys())
 
@@ -166,6 +171,7 @@ BASS_STYLES = {
     "pulse": lambda r: [r] * 8,
     "fifth": lambda r: [r, r, r + 7, r, r + 12, r, r + 7, r],
     "climb": lambda r: [r, r, r + 3, r + 3, r + 7, r + 7, r + 12, r + 7],
+    "chug": lambda r: [r, r, r, r + 7, r, r, r, r + 7],  # palm-mute feel
 }
 BASS_NAMES = list(BASS_STYLES.keys()) + ["none"]
 
@@ -174,6 +180,8 @@ DRUM_STYLES = {
     "drive": "K.hhS.hh",
     "sparse": "K...S...",
     "intense": "KKh.S.hK",
+    "blast": "KSKSKSKS",   # d-beat / blast feel
+    "double": "KKKSKKKS",  # double-kick drive
 }
 DRUM_NAMES = list(DRUM_STYLES.keys()) + ["none"]
 DRUM_FILLS = ["K.h.S.SS", "K.SSS.SS", "K.h.SKSK"]
