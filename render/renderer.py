@@ -35,6 +35,11 @@ class Batcher:
         x, y, wz = world_from_field(fx, fy, z)
         self.batches.setdefault(sprite, []).append((x, y, wz, scale, *quat, *tint))
 
+    def add_world(self, sprite, x, y, z, scale, quat=IDENTITY_QUAT,
+                  tint=(1, 1, 1, 1)):
+        """Add an instance directly in world coordinates (first-person games)."""
+        self.batches.setdefault(sprite, []).append((x, y, z, scale, *quat, *tint))
+
     def add_cube_late(self, fx, fy, scale, quat=IDENTITY_QUAT,
                       tint=(1, 1, 1, 1), z=0.0):
         x, y, wz = world_from_field(fx, fy, z)
@@ -65,6 +70,11 @@ class Renderer:
         self.shake = 0.0
         self.aberration = 0.0
         self.time = 0.0
+
+        # per-frame camera override for first-person games:
+        # (eye, center, fov_deg) — cleared in begin() so menus revert
+        self.camera_override = None
+        self._last_viewproj = None
 
         # starfield
         n = 520
@@ -114,6 +124,7 @@ class Renderer:
         self.time += dt
         self.shake = max(0.0, self.shake - dt * 1.8)
         self.aberration = max(0.0, self.aberration - dt * 2.2)
+        self.camera_override = None  # games re-set it every draw
         self.particles.update(dt)
 
         # starfield drift (wrap at bottom)
@@ -130,11 +141,34 @@ class Renderer:
         t = self.time
         sx = (self.rng.uniform(-1, 1) * self.shake)
         sy = (self.rng.uniform(-1, 1) * self.shake)
-        # pulled back far enough to frame the whole 640x720 field, from
-        # slightly below center so the player's end feels closer
-        eye = (math.sin(t * 0.13) * 0.3 + sx, -5.5 + sy, 25.5)
-        center = (sx * 0.5, sy * 0.5, 0.0)
-        return self.proj @ look_at(eye, center)
+        if self.camera_override is not None:
+            eye, center, fov = self.camera_override
+            eye = (eye[0] + sx * 0.15, eye[1] + sy * 0.15, eye[2])
+            proj = perspective(fov, self.width / self.height, 0.05, 120.0)
+            vp = proj @ look_at(eye, center)
+        else:
+            # pulled back far enough to frame the whole 640x720 field, from
+            # slightly below center so the player's end feels closer
+            eye = (math.sin(t * 0.13) * 0.3 + sx, -5.5 + sy, 25.5)
+            center = (sx * 0.5, sy * 0.5, 0.0)
+            vp = self.proj @ look_at(eye, center)
+        self._last_viewproj = vp
+        return vp
+
+    def project_to_screen(self, x, y, z):
+        """World position -> (screen_x, screen_y, depth) in logical render
+        coords, or None if behind the camera. Uses the last drawn frame's
+        camera — call after draw_scene()."""
+        vp = self._last_viewproj
+        if vp is None:
+            return None
+        v = vp @ np.array([x, y, z, 1.0], dtype=np.float64)
+        if v[3] <= 0.001:
+            return None
+        ndc = v[:3] / v[3]
+        sx = (ndc[0] * 0.5 + 0.5) * self.width
+        sy = (1.0 - (ndc[1] * 0.5 + 0.5)) * self.height
+        return sx, sy, ndc[2]
 
     def _star_instances(self):
         n = len(self.star_pos)
@@ -147,12 +181,13 @@ class Renderer:
         return out
 
     # ------------------------------------------------------- scene drawing
-    def draw_scene(self, batcher, walls=True):
+    def draw_scene(self, batcher, walls=True, stars=True):
         """Draw backdrop + a game's Batcher + particles in one pass."""
         vp = self._viewproj()
         self.shader.use(vp)
 
-        self.cube.draw(self._star_instances())
+        if stars:
+            self.cube.draw(self._star_instances())
         if walls:
             self.cube.draw(self.wall_instances)
 

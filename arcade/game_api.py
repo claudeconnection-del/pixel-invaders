@@ -25,6 +25,7 @@ class GameInfo:
         self.has_scores = has_scores  # shows SCORES menu / initials entry
         self.attract = attract        # eligible for attract-mode demos
         self.game_music = game_music  # cabinet plays the game pool while running
+        self.mouse_aim = False        # FPS-style: hide cursor, aim with mouse
         self.hud_score_label = hud_score_label
 
 

@@ -1,7 +1,26 @@
-"""Cabinet game registry: every playable game, in carousel order."""
+"""Cabinet game registry: categories and carousel order."""
 import importlib
 
-GAME_IDS = ["voxelhell", "breaker", "serpent", "studio"]
+CATEGORIES = [
+    ("CLASSICS +", ["voxelhell", "breaker", "serpent", "studio"]),
+    ("FPS", ["aimtrainer"]),  # voxeldoom + crisis join as they land
+]
+
+GAME_IDS = [gid for _, ids in CATEGORIES for gid in ids]
+
+
+def category_of(gid):
+    for name, ids in CATEGORIES:
+        if gid in ids:
+            return name
+    return CATEGORIES[0][0]
+
+
+def games_in_category(name):
+    for cat_name, ids in CATEGORIES:
+        if cat_name == name:
+            return ids
+    return CATEGORIES[0][1]
 
 
 def load_games():

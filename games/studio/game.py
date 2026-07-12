@@ -82,10 +82,14 @@ class StudioRun(GameRun):
         self.profile_levels = []    # rms per eighth for the playing audio
         self.play_started = 0.0
         self.playing_spec = None
-        self.play_queue = []        # remaining SectionSpecs when playing sequence
         self.eq = [0.0] * EQ_COLUMNS
         self.dirty = True           # spec changed since last bake
         self.baked_samples = None
+        # sequence playback: worker thread pre-renders sections, channel
+        # queueing chains them with no gap
+        self.seq_items = None       # list of (Sound, profile, spec) | None
+        self.seq_index = 0
+        self.queued_index = None
 
         # profile hooks (attach_profile fills these)
         self.section = None
@@ -140,7 +144,8 @@ class StudioRun(GameRun):
             self.channel.stop()
         self.channel = None
         self.playing_spec = None
-        self.play_queue = []
+        self.seq_items = None
+        self.queued_index = None
 
     def _bake(self):
         if self.dirty or self.baked_samples is None:
@@ -149,20 +154,17 @@ class StudioRun(GameRun):
             self.emit("studio_bake")
         return self.baked_samples
 
-    def _play_spec(self, spec, samples=None):
-        """Render (if needed) and start one section on a mixer channel."""
+    def _make_sound(self, spec, tag, samples=None):
+        """Render a spec to a mixer Sound (+ its EQ profile)."""
         samples = samples if samples is not None else build_section(spec)
-        self.profile_levels = rms_profile(samples, spec)
-        path = os.path.join(self._tmpdir, "preview.wav")
+        path = os.path.join(self._tmpdir, f"{tag}.wav")
         write_wav(path, samples)
         try:
-            self.preview_sound = pygame.mixer.Sound(path)
-            self.preview_sound.set_volume(0.55)
-            self.channel = self.preview_sound.play()
+            sound = pygame.mixer.Sound(path)
+            sound.set_volume(0.55)
         except pygame.error:
-            self.channel = None
-        self.playing_spec = spec
-        self.play_started = self.time
+            sound = None
+        return sound, rms_profile(samples, spec)
 
     def toggle_preview(self):
         if self.playing_spec is not None:
@@ -170,18 +172,40 @@ class StudioRun(GameRun):
             self.status = "Stopped"
             return
         self.status = "Baking..."
-        self._play_spec(self.spec, self._bake())
-        self.status = "Previewing — Space: stop"
+        sound, profile = self._make_sound(self.spec, "preview",
+                                          samples=self._bake())
+        self.preview_sound = sound
+        self.profile_levels = profile
+        # seamless: the mixer loops the buffer itself, no restart gap
+        self.channel = sound.play(loops=-1) if sound else None
+        self.playing_spec = self.spec
+        self.play_started = self.time
+        self.status = "Previewing (loops) — Space: stop"
 
     def play_sequence(self):
         if not self.sequence:
             self.status = "Sequence is empty — Enter adds the current section"
             return
         self._stop_playback()
-        self.play_queue = list(self.sequence)
-        first = self.play_queue.pop(0)
-        self._play_spec(first)
-        self.status = f"Playing sequence ({len(self.sequence)} sections)"
+        specs = list(self.sequence)
+        self.seq_items = [None] * len(specs)
+        sound, profile = self._make_sound(specs[0], "seq_0")
+        self.seq_items[0] = (sound, profile, specs[0])
+        self.seq_index = 0
+        self.queued_index = None
+        self.profile_levels = profile
+        self.playing_spec = specs[0]
+        self.play_started = self.time
+        self.channel = sound.play() if sound else None
+
+        def prerender():  # remaining sections bake while the first plays
+            for i, spec in enumerate(specs[1:], start=1):
+                s, p = self._make_sound(spec, f"seq_{i}")
+                self.seq_items[i] = (s, p, spec)
+
+        import threading
+        threading.Thread(target=prerender, daemon=True).start()
+        self.status = f"Playing sequence ({len(specs)} sections)"
 
     # -------------------------------------------------------------- actions
     def add_slot(self):
@@ -261,20 +285,48 @@ class StudioRun(GameRun):
         self.dirty = True
 
     # --------------------------------------------------------------- update
+    def _update_sequence_playback(self):
+        """Advance the pre-rendered chain; keep the next section queued on
+        the channel so transitions are gapless."""
+        if self.seq_items is None or self.channel is None:
+            return
+        current = self.channel.get_sound()
+        item = self.seq_items[self.seq_index]
+        if current is not None and item is not None and current is not item[0]:
+            # the queued sound took over: sync index + EQ profile
+            for i, entry in enumerate(self.seq_items):
+                if entry is not None and entry[0] is current:
+                    self.seq_index = i
+                    self.profile_levels = entry[1]
+                    self.playing_spec = entry[2]
+                    self.play_started = self.time
+                    break
+        nxt = self.seq_index + 1
+        if nxt < len(self.seq_items) and self.queued_index != nxt:
+            entry = self.seq_items[nxt]  # may still be baking on the thread
+            if entry is not None and entry[0] is not None:
+                self.channel.queue(entry[0])
+                self.queued_index = nxt
+        if not self.channel.get_busy():
+            self._stop_playback()
+            self.status = "Sequence finished"
+
     def update(self, dt, inp):
         self.time += dt
-        playing = self.channel is not None and self.channel.get_busy()
 
-        if self.playing_spec is not None and not playing:
-            if self.play_queue:
-                self._play_spec(self.play_queue.pop(0))
-            else:
-                self.playing_spec = None
+        if self.seq_items is not None:
+            self._update_sequence_playback()
+        elif self.playing_spec is not None and self.channel is not None \
+                and not self.channel.get_busy():
+            self.playing_spec = None  # preview stopped externally
 
         # drive the EQ from the precomputed rms profile
         if self.playing_spec is not None and self.profile_levels:
             eighth = 60 / self.playing_spec.tempo / 2
-            bucket = int((self.time - self.play_started) / eighth)
+            elapsed = self.time - self.play_started
+            if self.seq_items is None:  # looping preview wraps around
+                elapsed %= max(self.playing_spec.duration, 1e-6)
+            bucket = int(elapsed / eighth)
             if bucket < len(self.profile_levels):
                 self.eq.append(self.profile_levels[bucket])
                 self.eq = self.eq[-EQ_COLUMNS:]

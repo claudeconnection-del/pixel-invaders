@@ -16,7 +16,8 @@ from game import events as ev
 from game.assets import AudioBank, MUSIC_END_EVENT
 from game.entities import InputState
 from game.netclient import ArcadeClient
-from games import load_games, GAME_IDS
+from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
+                   load_games)
 from meta import leaderboard as lb
 from meta import profile as profile_mod
 from meta.achievements import AchievementEngine
@@ -281,19 +282,28 @@ class App:
             return
 
         if self.state == MENU:
-            if key in (pygame.K_LEFT, pygame.K_a):
-                self.cycle_game(-1)
-            elif key in (pygame.K_RIGHT, pygame.K_d):
-                self.cycle_game(1)
-            elif key in (pygame.K_UP, pygame.K_w):
-                self.menu_index = (self.menu_index - 1) % len(MENU_ITEMS)
+            rows = self.menu_rows()
+            self.menu_index = min(self.menu_index, len(rows) - 1)
+            if key in (pygame.K_UP, pygame.K_w):
+                self.menu_index = (self.menu_index - 1) % len(rows)
                 audio.play("menu_move")
             elif key in (pygame.K_DOWN, pygame.K_s):
-                self.menu_index = (self.menu_index + 1) % len(MENU_ITEMS)
+                self.menu_index = (self.menu_index + 1) % len(rows)
                 audio.play("menu_move")
+            elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d):
+                direction = 1 if key in (pygame.K_RIGHT, pygame.K_d) else -1
+                row = rows[self.menu_index]
+                if row == "CATEGORY":
+                    self.cycle_category(direction)
+                elif row == "GAME":
+                    self.cycle_game(direction)
             elif key == pygame.K_RETURN:
+                row = rows[self.menu_index]
                 audio.play("menu_select")
-                self.menu_choose(MENU_ITEMS[self.menu_index])
+                if row in ("CATEGORY", "GAME"):
+                    self.menu_index = 2  # jump to PLAY
+                else:
+                    self.menu_choose(row)
             elif key == pygame.K_ESCAPE:
                 self.quit()
 
@@ -388,11 +398,30 @@ class App:
             self.audio.set_music_enabled(on)
             self.save_profile()
 
+    def menu_rows(self):
+        """Navigable main-menu rows: carousels + this game's action items."""
+        info = self.game.INFO
+        actions = [m for m in MENU_ITEMS
+                   if (m != "HANGAR" or info.has_skins)
+                   and (m != "SCORES" or info.has_scores)]
+        return ["CATEGORY", "GAME"] + actions
+
+    def cycle_category(self, direction):
+        names = [name for name, _ in CATEGORIES]
+        idx = names.index(category_of(self.game_id))
+        new_category = names[(idx + direction) % len(names)]
+        self._select_game(games_in_category(new_category)[0])
+
     def cycle_game(self, direction):
-        idx = GAME_IDS.index(self.game_id)
-        self.game_id = GAME_IDS[(idx + direction) % len(GAME_IDS)]
-        self.profile["selected_game"] = self.game_id
+        ids = games_in_category(category_of(self.game_id))
+        idx = ids.index(self.game_id)
+        self._select_game(ids[(idx + direction) % len(ids)])
+
+    def _select_game(self, gid):
+        self.game_id = gid
+        self.profile["selected_game"] = gid
         self.skin_index = 0
+        self.menu_index = min(self.menu_index, len(self.menu_rows()) - 1)
         self.audio.play("menu_move")
         self.save_profile()
 
@@ -599,16 +628,28 @@ class App:
             self.pad_nav_cooldown = 0.22
 
     # ------------------------------------------------------------ gameplay
+    def mouse_logical(self):
+        """Window mouse position mapped through the letterbox into logical
+        1280x860 render coordinates."""
+        mx, my = pygame.mouse.get_pos()
+        lx, ly, lw, lh = self.renderer.post.letterbox()
+        if lw <= 0 or lh <= 0:
+            return WIDTH / 2, HEIGHT / 2
+        return ((mx - lx) * WIDTH / lw, (my - ly) * HEIGHT / lh)
+
     def gameplay_input(self):
         keys = pygame.key.get_pressed()
         pdx, pdy, pfire, pfocus = self.pad_state()
+        aim_x, aim_y = self.mouse_logical()
+        mouse_fire = pygame.mouse.get_pressed()[0]
         return InputState(
             left=keys[pygame.K_LEFT] or keys[pygame.K_a] or pdx < -0.35,
             right=keys[pygame.K_RIGHT] or keys[pygame.K_d] or pdx > 0.35,
             up=keys[pygame.K_UP] or keys[pygame.K_w] or pdy < -0.35,
             down=keys[pygame.K_DOWN] or keys[pygame.K_s] or pdy > 0.35,
             focus=keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT] or pfocus,
-            fire=keys[pygame.K_SPACE] or pfire,
+            fire=keys[pygame.K_SPACE] or pfire or mouse_fire,
+            aim_x=aim_x, aim_y=aim_y,
         )
 
     def post_banner(self, text, seconds):
@@ -674,32 +715,47 @@ class App:
     def draw_menu(self):
         o = self.renderer.overlay
         info = self.game.INFO
-        o.text("PIXEL INVADERS ARCADE", WIDTH / 2, 90, size=48, color=GREEN,
+        o.text("PIXEL INVADERS ARCADE", WIDTH / 2, 80, size=48, color=GREEN,
                center=True)
-        multi = len(GAME_IDS) > 1
-        title = f"< {info.name} >" if multi else info.name
-        o.text(title, WIDTH / 2, 190, size=34, color=RED, center=True)
-        o.text(info.tagline, WIDTH / 2, 240, size=16, color=DIM, center=True)
 
-        items = [m for m in MENU_ITEMS
-                 if (m != "HANGAR" or info.has_skins)
-                 and (m != "SCORES" or info.has_scores)]
-        if MENU_ITEMS[self.menu_index] not in items:
-            self.menu_index = 0
-        for i, item in enumerate(items):
-            actual_index = MENU_ITEMS.index(item)
-            selected = actual_index == self.menu_index
-            color = WHITE if selected else DIM
-            prefix = "> " if selected else "  "
-            o.text(prefix + item, WIDTH / 2 - 90, 330 + i * 48, size=28, color=color)
+        rows = self.menu_rows()
+        self.menu_index = min(self.menu_index, len(rows) - 1)
+        y = 210
+        for i, row in enumerate(rows):
+            selected = i == self.menu_index
+            if row == "CATEGORY":
+                label = category_of(self.game_id)
+                o.text("> CATEGORY" if selected else "  CATEGORY",
+                       WIDTH / 2 - 250, y, size=22,
+                       color=WHITE if selected else DIM)
+                o.text(f"< {label} >" if selected else label,
+                       WIDTH / 2 + 60, y, size=22,
+                       color=GOLD if selected else DIM)
+                y += 46
+            elif row == "GAME":
+                o.text("> GAME" if selected else "  GAME",
+                       WIDTH / 2 - 250, y, size=22,
+                       color=WHITE if selected else DIM)
+                o.text(f"< {info.name} >" if selected else info.name,
+                       WIDTH / 2 + 60, y, size=22,
+                       color=RED if selected else DIM)
+                y += 34
+                o.text(info.tagline, WIDTH / 2 - 20, y, size=13, color=DIM)
+                y += 42
+            else:
+                prefix = "> " if selected else "  "
+                o.text(prefix + row, WIDTH / 2 - 250, y, size=26,
+                       color=WHITE if selected else DIM)
+                y += 46
 
         life = self.section["lifetime"]
-        o.text(f"BEST {life['best_score']:07d}", WIDTH / 2, 640, size=18,
+        o.text(f"BEST {life['best_score']:07d}", WIDTH / 2, y + 24, size=18,
                color=GOLD, center=True)
         unlocked = len(self.section["achievements"])
-        o.text(f"{unlocked}/{len(self.game.ACHIEVEMENTS)} achievements",
-               WIDTH / 2, 670, size=14, color=DIM, center=True)
-        o.text("Left/Right: game   C: CRT   M: music   Esc: quit",
+        if self.game.ACHIEVEMENTS:
+            o.text(f"{unlocked}/{len(self.game.ACHIEVEMENTS)} achievements",
+                   WIDTH / 2, y + 54, size=14, color=DIM, center=True)
+        o.text("Left/Right: change   C: CRT   M: music   Esc: quit",
                WIDTH / 2, HEIGHT - 40, size=14, color=DIM, center=True)
         self.draw_banner_and_toasts()
 
@@ -1035,6 +1091,9 @@ class App:
                 self.idle_timer += dt
                 if self.idle_timer >= ATTRACT_IDLE_SECONDS:
                     self.start_attract()
+
+            pygame.mouse.set_visible(
+                not (self.state == PLAYING and self.game.INFO.mouse_aim))
 
             self.renderer.begin(dt if self.state != PAUSED else 0.0)
             self.draw_3d_layer(dt, showcase_timer)

@@ -61,6 +61,30 @@ def main():
             render_frame()
     print(f"cabinet screens OK for {GAME_IDS}")
 
+    # menu nav regression: Down from PLAY must move even when HANGAR/SCORES
+    # are hidden (studio), and category carousel must switch game groups
+    from games import category_of
+    app.game_id = "studio"
+    app.state = game_main.MENU
+    rows = app.menu_rows()
+    assert "HANGAR" not in rows and "SCORES" not in rows
+    app.menu_index = rows.index("PLAY")
+    app.handle_keydown(pygame.K_DOWN)
+    assert app.menu_rows()[app.menu_index] != "PLAY", \
+        "Down from PLAY did not move selection"
+    for _ in range(len(app.menu_rows()) + 2):  # full wrap both directions
+        app.handle_keydown(pygame.K_DOWN)
+    for _ in range(len(app.menu_rows()) + 2):
+        app.handle_keydown(pygame.K_UP)
+    app.menu_index = 0  # CATEGORY row
+    before = category_of(app.game_id)
+    app.handle_keydown(pygame.K_RIGHT)
+    assert category_of(app.game_id) != before, "category did not switch"
+    app.handle_keydown(pygame.K_LEFT)
+    assert category_of(app.game_id) == before
+    render_frame()
+    print("menu navigation OK (hidden rows + categories)")
+
     # settings adjustments apply cleanly
     app.state = game_main.SETTINGS_SCREEN
     for idx in (0, 3, 4, 6, 8):
@@ -89,10 +113,12 @@ def main():
           f"{len(picks)} plays)")
 
     # play every game/mode with its bot through the real app
+    from games.aimtrainer.bot import demo_bot as aim_bot
     bots = {"voxelhell": dodge_bot_input, "breaker": breaker_bot,
-            "serpent": serpent_bot}
+            "serpent": serpent_bot, "aimtrainer": aim_bot}
     plans = [("voxelhell", "campaign"), ("voxelhell", "endless"),
-             ("breaker", "arcade"), ("serpent", "arcade")]
+             ("breaker", "arcade"), ("serpent", "arcade"),
+             ("aimtrainer", "gridshot")]
     for gid, mode in plans:
         app.game_id = gid
         app.state = game_main.MENU

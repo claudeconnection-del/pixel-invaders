@@ -136,3 +136,31 @@ class OverlayRenderer:
         glUniform4f(self.u_tint, color[0] / 255, color[1] / 255, color[2] / 255,
                     (color[3] if len(color) > 3 else 255) / 255)
         self._draw_quad(x, y, w, h)
+
+    def image(self, key, surface, x, y, scale=1.0, center=False,
+              tint=(255, 255, 255, 255)):
+        """Draw a pygame Surface as a cached texture. `key` identifies the
+        cache slot — reuse the same key for the same surface content."""
+        cache_key = ("__img__", key)
+        if cache_key not in self.cache:
+            w, h = surface.get_size()
+            data = pygame.image.tobytes(surface, "RGBA", False)
+            tex = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, tex)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA,
+                         GL_UNSIGNED_BYTE, data)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+            self.cache[cache_key] = (tex, w, h)
+        tex, w, h = self.cache[cache_key]
+        dw, dh = w * scale, h * scale
+        if center:
+            x -= dw / 2
+            y -= dh / 2
+        glBindTexture(GL_TEXTURE_2D, tex)
+        glUniform1i(self.u_use_tex, 1)
+        glUniform4f(self.u_tint, tint[0] / 255, tint[1] / 255, tint[2] / 255,
+                    (tint[3] if len(tint) > 3 else 255) / 255)
+        self._draw_quad(x, y, dw, dh)

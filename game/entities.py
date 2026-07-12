@@ -18,6 +18,10 @@ class InputState:
     down: bool = False
     focus: bool = False
     fire: bool = False
+    # pointer aim in logical screen coords (1280x860 render space); used by
+    # the FPS games, ignored by the classics
+    aim_x: float = 640.0
+    aim_y: float = 430.0
 
 
 @dataclass
