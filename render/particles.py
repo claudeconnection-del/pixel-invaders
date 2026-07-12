@@ -43,9 +43,16 @@ class ParticleSystem:
     def burst(self, fx, fy, colors, count=40, speed=(2.0, 7.0), life=(0.4, 1.0),
               scale=(0.05, 0.16), emissive=1.6, gravity=1.0):
         """Explosion at field coords: cubes fly outward in 3D."""
+        x, y, z = world_from_field(fx, fy)
+        self.burst_world(x, y, z, colors, count=count, speed=speed, life=life,
+                         scale=scale, emissive=emissive, gravity=gravity)
+
+    def burst_world(self, x, y, z, colors, count=40, speed=(2.0, 7.0),
+                    life=(0.4, 1.0), scale=(0.05, 0.16), emissive=1.6,
+                    gravity=1.0):
+        """Explosion at raw world coords (first-person games)."""
         count = max(1, int(count * self.density))
         idx = self._alloc(count)
-        x, y, z = world_from_field(fx, fy)
         self.pos[idx] = (x, y, z)
         for k, i in enumerate(idx):
             theta = self.rng.uniform(0, math.tau)

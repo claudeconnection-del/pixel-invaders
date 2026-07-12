@@ -256,6 +256,78 @@ POWERUP_SHIELD = [
     "..BB..",
 ]
 
+# --------------------------------------------------------------------- fps
+IMP_A = [
+    ".R....R.",
+    ".RR..RR.",
+    "..RRRR..",
+    ".RRyyRR.",
+    "RRRRRRRR",
+    "R.RRRR.R",
+    "..RR.RR.",
+    ".R....R.",
+]
+IMP_B = [
+    ".R....R.",
+    ".RR..RR.",
+    "..RRRR..",
+    ".RRyyRR.",
+    "RRRRRRRR",
+    "R.RRRR.R",
+    ".RR.RR..",
+    "R....R..",
+]
+
+GUNNER_A = [
+    "..####..",
+    ".##bb##.",
+    ".######.",
+    "B######B",
+    "B##BB##B",
+    ".##BB##.",
+    ".##..##.",
+    ".##..##.",
+]
+GUNNER_B = [
+    "..####..",
+    ".##bb##.",
+    ".######.",
+    "B######B",
+    "B##BB##B",
+    ".##BB##.",
+    ".##..##.",
+    "##....##",
+]
+
+GUN_VIEW = [
+    "......####..",
+    "......#WW#..",
+    "......#WW#..",
+    ".....##WW##.",
+    "....########",
+    "...##W####W#",
+    "..##W####W##",
+    ".###########",
+]
+
+MEDKIT = [
+    "WWWWWW",
+    "WW.RWW",
+    "W.RRRW",
+    "W.RRRW",
+    "WW.RWW",
+    "WWWWWW",
+]
+
+AMMO_BOX = [
+    "dDDDDd",
+    "DYYYYD",
+    "DYyyYD",
+    "DYyyYD",
+    "DYYYYD",
+    "dDDDDd",
+]
+
 # ------------------------------------------------------------------ breaker
 PADDLE = [
     "cCCCCCCCCc",
@@ -312,5 +384,25 @@ ALL_SPRITES = {
     "powerup_shield": POWERUP_SHIELD,
     "paddle": PADDLE,
     "brick": BRICK,
+    "imp_a": IMP_A,
+    "imp_b": IMP_B,
+    "gunner_a": GUNNER_A,
+    "gunner_b": GUNNER_B,
+    "medkit": MEDKIT,
+    "ammo_box": AMMO_BOX,
     "explosion": EXPLOSION,
 }
+
+
+def surface_from_grid(grid, scale=8):
+    """Rasterize a pixel grid to a pygame Surface (HUD viewmodels etc.)."""
+    import pygame
+    w, h = len(grid[0]), len(grid)
+    surf = pygame.Surface((w * scale, h * scale), pygame.SRCALPHA)
+    for y, row in enumerate(grid):
+        for x, ch in enumerate(row):
+            color = PALETTE[ch]
+            if color[3] == 0:
+                continue
+            surf.fill(color, (x * scale, y * scale, scale, scale))
+    return surf

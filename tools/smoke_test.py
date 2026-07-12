@@ -114,11 +114,15 @@ def main():
 
     # play every game/mode with its bot through the real app
     from games.aimtrainer.bot import demo_bot as aim_bot
+    from games.crisis.bot import demo_bot as crisis_bot
+    from games.voxeldoom.bot import demo_bot as doom_bot
     bots = {"voxelhell": dodge_bot_input, "breaker": breaker_bot,
-            "serpent": serpent_bot, "aimtrainer": aim_bot}
+            "serpent": serpent_bot, "aimtrainer": aim_bot,
+            "voxeldoom": doom_bot, "crisis": crisis_bot}
     plans = [("voxelhell", "campaign"), ("voxelhell", "endless"),
              ("breaker", "arcade"), ("serpent", "arcade"),
-             ("aimtrainer", "gridshot")]
+             ("aimtrainer", "gridshot"), ("voxeldoom", "campaign"),
+             ("crisis", "arcade")]
     for gid, mode in plans:
         app.game_id = gid
         app.state = game_main.MENU
