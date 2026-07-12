@@ -1,7 +1,7 @@
 """Post-deploy smoke test, run on the box against the LIVE service after
 every automated redeploy. Stdlib only — no pip installs needed on the box.
 
-Usage: python3 server/deploy_smoke.py [base_url]   (default http://localhost:8000)
+Usage: python3 server/deploy_smoke.py [base_url]   (default http://localhost:8083)
 
 Uses game id "_ci" so test traffic lands on a board no game ever shows.
 Exits non-zero (failing the deploy job) if anything is off.
