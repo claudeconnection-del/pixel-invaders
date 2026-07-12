@@ -42,3 +42,24 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/pixel-invaders-arcade:latest
             ghcr.io/${{ github.repository_owner }}/pixel-invaders-arcade:${{ github.sha }}
+
+  # Runs on the Ubuntu box via a self-hosted runner (label: arcade-box).
+  # Pulls the image CI just published, restarts the service, then smoke
+  # tests the LIVE deployment. If no runner is online, this job simply
+  # waits in the queue until one registers.
+  deploy:
+    needs: build-and-push
+    runs-on: [self-hosted, arcade-box]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redeploy the arcade service
+        run: |
+          cd ~/arcade
+          docker compose pull
+          docker compose up -d
+      - name: Smoke test the live deployment
+        run: python3 server/deploy_smoke.py http://localhost:8000
+      - name: Prune old images
+        if: success()
+        run: docker image prune -f

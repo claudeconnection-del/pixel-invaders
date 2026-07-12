@@ -67,6 +67,58 @@ Don't create any cron jobs or auto-updaters — I update manually. Don't
 change any other firewall rules or system settings.
 ```
 
+## Continuous deployment (self-hosted runner)
+
+With a self-hosted GitHub Actions runner on the box, every push that touches
+`server/**` flows automatically: **cloud CI tests → image builds → the box
+pulls + redeploys → a smoke test verifies the live service** (health, score
+round trip, scoreboard page, multiplayer session, daily seed — using a
+hidden `_ci` board so real leaderboards stay clean). If the smoke test
+fails, the workflow run goes red so you know before anyone plays.
+
+Set it up by pasting this prompt into Claude Code on the box (after the
+base install above is running):
+
+```text
+Install a self-hosted GitHub Actions runner on this machine for the private
+repo claudeconnection-del/pixel-invaders, so its "deploy" workflow job can
+redeploy the LAN-local arcade service that already runs from
+~/arcade/docker-compose.yml.
+
+Steps:
+1. Create ~/actions-runner and install the latest Linux x64 runner from
+   GitHub's official releases (follow the commands GitHub shows under repo
+   Settings -> Actions -> Runners -> New self-hosted runner -> Linux).
+   I'll open that page and paste you the registration token when you ask —
+   don't echo it back or store it anywhere.
+2. Configure with: ./config.sh --url
+   https://github.com/claudeconnection-del/pixel-invaders --token <TOKEN>
+   --unattended --name arcade-box --labels arcade-box
+3. Install and start it as a systemd service (sudo ./svc.sh install $USER
+   && sudo ./svc.sh start) so it survives reboots.
+4. Verify the runner user can run docker (docker ps) and python3 exists —
+   the deploy job runs "docker compose pull/up" in ~/arcade and
+   "python3 server/deploy_smoke.py http://localhost:8000".
+5. Confirm the runner shows "Idle" via the GitHub API or ask me to check
+   the repo's Runners page.
+6. If a "deploy" job is already queued on the repo (it queues whenever CI
+   ran without a runner online), it should start within a minute of the
+   runner coming up — watch it complete and confirm
+   "DEPLOY SMOKE PASSED" appears in the job log.
+
+Don't add any other workflows, secrets, or cron jobs.
+```
+
+Notes:
+- The deploy job targets `runs-on: [self-hosted, arcade-box]`; the runner
+  registered above is the only thing that will pick it up.
+- If the box is off when you push, the deploy job just waits in the queue
+  and executes when the runner comes back online.
+- Manual redeploys still work anytime: `cd ~/arcade && docker compose pull
+  && docker compose up -d`, or re-run the workflow from the Actions tab.
+- Rollback: `cd ~/arcade && docker compose down` then pin a previous tag in
+  docker-compose.yml (`...:latest` -> `...:<old-sha>`) and `up -d`.
+
 ## Manual install (reference)
 
 ```bash
