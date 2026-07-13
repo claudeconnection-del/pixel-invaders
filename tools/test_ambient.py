@@ -52,6 +52,33 @@ def test_idle_target():
     print("idle target OK")
 
 
+def test_premium_ids():
+    # premium presets map to the REAL flagship (non-multiplayer) achievement ids
+    prem = {p.id: p.premium for p in DEFAULTS if p.premium}
+    assert prem == {"supernova": "boss_slayer",
+                    "ember_hellscape": "rock_bottom",
+                    "equalizer": "resident_composer"}, prem
+    print(f"premium unlock ids OK ({len(prem)} premium presets)")
+
+
+def test_ambient_achievement_unlocks():
+    from meta.achievements import evaluate_ambient  # cabinet-level eval hook
+    profile = {}
+    got = evaluate_ambient(profile, {"session_seconds": 600, "idle_entries": 0,
+                                     "since_run_end_s": 1e9, "hour": 12})
+    assert {a.id for a in got} == {"deep_breath"}
+    # idempotent: the same context does not re-award
+    assert evaluate_ambient(profile, {"session_seconds": 600, "idle_entries": 0,
+                                      "since_run_end_s": 1e9, "hour": 12}) == []
+    # crossing the other thresholds awards only the newly-earned ones
+    got2 = evaluate_ambient(profile, {"session_seconds": 0, "idle_entries": 25,
+                                      "since_run_end_s": 30, "hour": 2})
+    assert {a.id for a in got2} == {"drifted_off", "take_a_break", "night_owl"}
+    assert set(profile["ambient"]["achievements"]) == {
+        "deep_breath", "drifted_off", "take_a_break", "night_owl"}
+    print("ambient achievement unlocks OK")
+
+
 def test_ambient_achievements():
     by_id = {a[0]: a[3] for a in AMBIENT_ACHIEVEMENTS}
     base = {"session_seconds": 0, "idle_entries": 0, "since_run_end_s": 1e9, "hour": 12}
@@ -75,6 +102,8 @@ def main():
     test_unlock_gating()
     test_custom_presets()
     test_idle_target()
+    test_premium_ids()
+    test_ambient_achievement_unlocks()
     test_ambient_achievements()
     print("ALL AMBIENT TESTS PASSED")
 

@@ -59,15 +59,20 @@ DEFAULTS = [
     AmbientPreset("fireplace", "Fireplace", "fireplace",
                   [_rgb(theme.EMBER), _rgb(theme.RUST), _rgb(theme.HONEY)],
                   speed=1.1, density="medium", dim=0.1, sound="bed:ambient"),
-    # Premium — hidden until a flagship (non-multiplayer) achievement unlocks it.
-    # Unlock ids are confirmed against each game's ACHIEVEMENTS in the unlock-
-    # wiring increment; kept as intent-named placeholders here.
+    # Premium — hidden until a flagship (non-multiplayer) achievement unlocks
+    # it. Unlock ids are the real achievement ids from each game's ACHIEVEMENTS.
     AmbientPreset("supernova", "Supernova", "nebula",
                   [_rgb(theme.BLOOM), _rgb(theme.EMBER), _rgb(theme.IRIS)],
-                  speed=0.7, density="high", dim=0.1, premium="voxelhell_boss"),
+                  speed=0.7, density="high", dim=0.1,
+                  premium="boss_slayer"),        # Voxel Hell: beat the Dreadnought
     AmbientPreset("ember_hellscape", "Ember Hellscape", "embers",
                   [_rgb(theme.GARNET), _rgb(theme.RUST), _rgb(theme.EMBER)],
-                  speed=1.4, density="high", dim=0.05, premium="voxeldoom_clear"),
+                  speed=1.4, density="high", dim=0.05,
+                  premium="rock_bottom"),        # Voxel Doom: escape all floors
+    AmbientPreset("equalizer", "Equalizer", "equalizer",
+                  [_rgb(theme.BLOOM), _rgb(theme.FROST), _rgb(theme.IRIS)],
+                  speed=1.0, density="high", dim=0.08,
+                  premium="resident_composer"),  # Voxel Studio: export a soundtrack
 ]
 
 

@@ -35,7 +35,7 @@ from meta import ghost as ghost_mod
 from meta import leaderboard as lb
 from meta import profile as profile_mod
 from meta import replay as replay_mod
-from meta.achievements import AchievementEngine
+from meta.achievements import AchievementEngine, evaluate_ambient
 from meta.outbox import Outbox
 from meta.stats import StatsTracker
 
@@ -1104,7 +1104,23 @@ class App:
         self.ambient_session += dt
         amb = profile_mod.ambient_section(self.profile)
         amb["counters"]["total_seconds"] += dt
-        # I6 evaluates the mood achievements against these counters here.
+        self._check_ambient_achievements(amb)
+
+    def _check_ambient_achievements(self, amb):
+        """Evaluate the mood achievements against live counters + context; toast
+        and persist any new unlock. Cheap (4 predicates); safe to call each
+        frame since only an actual unlock writes the profile."""
+        last_end = amb["counters"].get("last_run_end_ts", 0.0)
+        context = {
+            "session_seconds": self.ambient_session,
+            "idle_entries": amb["counters"].get("idle_entries", 0),
+            "since_run_end_s": (time.time() - last_end) if last_end else 1e9,
+            "hour": time.localtime().tm_hour,
+        }
+        for achievement in evaluate_ambient(self.profile, context):
+            self.toasts.append([achievement, 3.5])
+            self.audio.play("toast")
+            self.save_profile()
 
     # ---- in-ambient customization (manual only) --------------------------
     def _open_ambient_edit(self):
@@ -1364,6 +1380,10 @@ class App:
         if self.run_summary is not None and self.state == PLAYING:
             self.state = RUN_END
             self.audio.music(None)
+            # stamp the run-end time so a quick slip into ambient can earn the
+            # "Take a Break" mood achievement
+            profile_mod.ambient_section(self.profile)["counters"][
+                "last_run_end_ts"] = time.time()
             score = self.run_summary["score"]
             if self.ghost_rec is not None and self.ghost_rec.samples:
                 ghost = self.ghost_rec.build(self.game_id, self.run_mode, score)
@@ -2041,6 +2061,7 @@ class App:
                                       self.entered_auto)
             if self.ambient_edit:
                 self.draw_ambient_edit(self.renderer.overlay)
+            self.draw_banner_and_toasts()  # celebrate a mood-achievement unlock
         elif self.state == ATTRACT:
             self.draw_attract_overlay()
         if self.profile["settings"].get("show_fps"):

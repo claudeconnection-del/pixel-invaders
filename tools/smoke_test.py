@@ -344,8 +344,23 @@ def main():
     assert app.audio.current_pool == "ambient", "bed preset did not play the pool"
     app.handle_keydown(pygame.K_SPACE)
     assert app.state == game_main.MENU
-    print(f"ambient mode OK (manual + idle + bed pool, "
-          f"{amb['counters']['total_seconds']:.1f}s logged)")
+
+    # premium unlock gating: Supernova is hidden until Voxel Hell's boss_slayer
+    # achievement is earned, then it appears
+    assert "supernova" not in {p.id for p in app._ambient_presets()}
+    profile_mod.game_section(app.profile, "voxelhell")["achievements"][
+        "boss_slayer"] = {"unlocked_at": "x"}
+    assert "supernova" in {p.id for p in app._ambient_presets()}
+
+    # mood achievement: ten unbroken minutes earns Deep Breath
+    app.start_ambient(auto=False)
+    app.ambient_session = 601
+    app._check_ambient_achievements(amb)
+    assert "deep_breath" in amb["achievements"]
+    app.handle_keydown(pygame.K_SPACE)
+    assert app.state == game_main.MENU
+    print(f"ambient mode OK (manual + idle + bed + premium gate + mood, "
+          f"{amb['counters']['total_seconds']:.1f}s)")
 
     pygame.quit()
     print("SMOKE TEST PASSED")

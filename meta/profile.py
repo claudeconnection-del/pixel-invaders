@@ -56,10 +56,12 @@ DEFAULT_PROFILE = {
         "player_name": "AAA",  # arcade initials
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8083
     },
-    # ambient mode: last-used preset, custom save slots, and mood counters
+    # ambient mode: last-used preset, custom save slots, mood counters, and the
+    # cabinet-level (mood) achievement unlocks
     "ambient": {
         "current": "embers",
         "custom": [],          # AmbientPreset dicts (capped by the UI)
+        "achievements": {},    # id -> {"unlocked_at": iso8601}
         "counters": {
             "total_seconds": 0.0,   # lifetime seconds spent in ambient
             "idle_entries": 0,      # lifetime auto (idle) entries
@@ -97,6 +99,7 @@ def ambient_section(profile):
     amb = profile.setdefault("ambient", copy.deepcopy(AMBIENT_DEFAULT))
     amb.setdefault("current", AMBIENT_DEFAULT["current"])
     amb.setdefault("custom", [])
+    amb.setdefault("achievements", {})
     counters = amb.setdefault("counters", {})
     for key, value in AMBIENT_DEFAULT["counters"].items():
         counters.setdefault(key, value)
