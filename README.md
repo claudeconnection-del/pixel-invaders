@@ -92,6 +92,20 @@ particle density, CRT, volumes, FPS counter. **Attract mode** starts after 15s i
 menu — a bot plays the cabinet's games until you press something. Qualifying scores get
 3-letter **initials entry** into local top-10 boards per game/mode.
 
+## Ghosts, replays & export
+
+Because every game is a **deterministic seeded simulation**, a run is fully captured by its
+seed + input stream (a few KB, not a video). That unlocks three things:
+
+- **Ghost racing** — solo runs race a translucent rival of your personal best (toggle in
+  Settings → *Ghost rival*), with a live pace HUD showing whether you're ahead or behind.
+- **Replays** — every run is recorded; the run-end screen lets you **keep** it (`K`).
+- **Export GIF / MP4** — from the run-end screen (`G` / `V`), re-rendered offscreen in a
+  background process → `exports/`. All **client-side** — the home-box server never renders.
+  GIF needs only Pillow; MP4 needs the optional `imageio-ffmpeg` (a bundled ffmpeg), and
+  falls back to GIF if it's absent. Export any saved replay later, too:
+  `python tools/export_replay.py replays/<file>.json --mp4`.
+
 ## Multiplayer
 
 With the backend deployed (see [DEPLOY.md](DEPLOY.md)), every scored game gains a

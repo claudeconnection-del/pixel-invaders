@@ -1,3 +1,6 @@
 pygame-ce>=2.5
 numpy>=2.0
 PyOpenGL>=3.1
+Pillow>=10.0
+# Optional: MP4 replay export (bundles a static ffmpeg). GIF works without it.
+# pip install imageio-ffmpeg

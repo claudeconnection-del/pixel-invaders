@@ -15,9 +15,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # isolate the profile so smoke tests never touch the real save
 import meta.profile as profile_mod  # noqa: E402
 import meta.ghost as ghost_mod  # noqa: E402
+import meta.replay as replay_mod  # noqa: E402
 _tmp = tempfile.mkdtemp()
 profile_mod.default_path = lambda: os.path.join(_tmp, "profile.json")
 ghost_mod.default_path = lambda: os.path.join(_tmp, "ghosts.json")
+replay_mod.REPLAY_DIR = os.path.join(_tmp, "replays")
 
 import pygame  # noqa: E402
 
@@ -218,6 +220,14 @@ def main():
     assert section["lifetime"]["runs"] >= 1
     print(f"run end + persistence OK (runs={section['lifetime']['runs']}, "
           f"achievements={sorted(section['achievements'])})")
+
+    # the ended run was recorded as a replay and saved
+    assert app.last_replay is not None and app.last_replay["dts"], \
+        "run replay not recorded"
+    rpath = replay_mod.last_path("voxelhell", app.run_mode)
+    assert os.path.exists(rpath), "last-run replay not written"
+    print(f"replay recorded OK ({len(app.last_replay['dts'])} frames, "
+          f"seed={app.last_replay['seed']})")
 
     # initials entry -> leaderboard (score qualified since board is empty)
     assert app.pending_board is not None, "score should qualify for empty board"

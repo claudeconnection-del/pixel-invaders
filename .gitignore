@@ -7,3 +7,5 @@ usermusic/
 arcade.db
 tools/_*.png
 ghosts.json
+replays/
+exports/

@@ -7,7 +7,9 @@ Cabinet controls:
 Game controls are per-game (Voxel Hell: Space fire, Shift focus).
 """
 import math
+import os
 import random
+import subprocess
 import sys
 
 import pygame
@@ -25,6 +27,7 @@ from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
 from meta import ghost as ghost_mod
 from meta import leaderboard as lb
 from meta import profile as profile_mod
+from meta import replay as replay_mod
 from meta.achievements import AchievementEngine
 from meta.outbox import Outbox
 from meta.stats import StatsTracker
@@ -173,6 +176,12 @@ class App:
         self.ghost_rec = None       # recorder for the current run
         self.ghost_play = None      # replayer of a rival ghost, or None
         self.run_elapsed = 0.0      # play time for ghost timing
+
+        # run replays: deterministic input-stream recording of the last run
+        self.run_seed = 0
+        self.replay_rec = None
+        self.last_replay = None
+        self.export_status = ""     # run-end export feedback
 
         # multiplayer session state
         self.mp = None            # {code, seed, game, mode, players, name}
@@ -499,6 +508,14 @@ class App:
                 else:
                     self.state = MENU
                     self.audio.music("menu")
+            elif key == pygame.K_g and self.last_replay is not None:
+                self._spawn_export("gif")
+            elif key == pygame.K_v and self.last_replay is not None:
+                self._spawn_export("mp4")
+            elif key == pygame.K_k and self.last_replay is not None:
+                path = replay_mod.keep(self.last_replay)
+                self.export_status = f"Replay kept: {os.path.basename(path)}"
+                self.audio.play("menu_select")
 
         # global toggles
         if key == pygame.K_c and self.state != SETTINGS_SCREEN:
@@ -573,6 +590,11 @@ class App:
 
     # ---------------------------------------------------------------- runs
     def start_run(self, mode, seed=None):
+        # a concrete seed makes every run reproducible (ghosts, replays,
+        # exports); multiplayer passes the shared seed in
+        if seed is None:
+            seed = random.randrange(2 ** 31)
+        self.run_seed = seed
         self.run = self.game.create_run(mode, random.Random(seed))
         if hasattr(self.run, "attach_profile"):
             self.run.attach_profile(self.section, self.profile["settings"],
@@ -586,6 +608,7 @@ class App:
         self.wave_banner = None
         self.state = PLAYING
         self._setup_ghosts(mode)
+        self._setup_replay(mode, seed)
         if self.game.INFO.mouse_look:
             pygame.mouse.get_rel()  # flush menu motion so the camera doesn't snap
         # tool modules (studio) manage their own audio; games get their pool
@@ -607,11 +630,42 @@ class App:
                 if player.valid:
                     self.ghost_play = player
 
+    def _setup_replay(self, mode, seed):
+        """Record real runs (not the studio tool) as a deterministic input
+        stream so the run can be watched or exported to GIF/MP4 later."""
+        self.replay_rec = None
+        self.last_replay = None
+        if not self.game.INFO.has_scores:
+            return
+        analog = self.game.INFO.mouse_aim or self.game.INFO.mouse_look
+        self.replay_rec = replay_mod.ReplayRecorder(
+            self.game_id, mode, seed, analog)
+
     def gameplay_music_pool(self):
         """The section pool for the running game ('game', 'metal', ... or
         None for tool modules that manage their own audio)."""
         info = self.game.INFO
         return info.music_pool if info.game_music else None
+
+    def _spawn_export(self, fmt):
+        """Export the last run to GIF/MP4 in a background process — a fresh
+        GL context, so it never touches the live game and never blocks."""
+        from render import export as export_mod
+        if fmt == "mp4" and not export_mod.mp4_available():
+            self.export_status = "MP4 needs imageio-ffmpeg — exporting GIF"
+            fmt = "gif"
+        path = replay_mod.last_path(self.game_id, self.run_mode)
+        repo = os.path.dirname(os.path.abspath(__file__))
+        args = [sys.executable, os.path.join(repo, "tools", "export_replay.py"),
+                path]
+        if fmt == "mp4":
+            args.append("--mp4")
+        try:
+            subprocess.Popen(args, cwd=repo)
+            self.export_status = f"Exporting {fmt.upper()} to exports/ ..."
+            self.audio.play("menu_select")
+        except OSError:
+            self.export_status = "Export failed to start"
 
     # ------------------------------------------------------------- initials
     def _cycle_initial(self, direction):
@@ -851,8 +905,11 @@ class App:
 
     def update_playing(self, dt):
         run = self.run
-        run.update(dt, self.gameplay_input())
+        inp = self.gameplay_input()
+        run.update(dt, inp)
         self.run_elapsed += dt
+        if self.replay_rec is not None:
+            self.replay_rec.on_frame(dt, inp)
         if self.ghost_rec is not None:
             self.ghost_rec.on_frame(dt, run)
         # hand the game the rival's interpolated sample so its draw() can
@@ -893,6 +950,10 @@ class App:
                 ghost = self.ghost_rec.build(self.game_id, self.run_mode, score)
                 if ghost_mod.maybe_store_best(self.ghosts, ghost):
                     self.post_banner("NEW GHOST SAVED", 2.0)
+            if self.replay_rec is not None and self.replay_rec.frame_count:
+                self.last_replay = self.replay_rec.build(score)
+                replay_mod.save_last(self.last_replay)
+            self.export_status = ""
             if self.mp is not None:
                 # session runs report to the lobby, not the initials flow;
                 # queued so a dropped connection still lands the score
@@ -1151,6 +1212,13 @@ class App:
             o.text(value, self.W / 2 + 120, y, size=20, color=TEXT)
         if self.section["lifetime"]["best_score"] <= s["score"] and s["score"] > 0:
             o.text("NEW BEST!", self.W / 2, 240, size=22, color=EMBER, center=True)
+        # replay export offer (recorded runs only)
+        if self.last_replay is not None:
+            o.text("G: export GIF    V: export MP4    K: keep replay",
+                   self.W / 2, self.H - 96, size=15, color=DIM, center=True)
+        if self.export_status:
+            o.text(self.export_status, self.W / 2, self.H - 122, size=15,
+                   color=theme.GOOD, center=True)
         footer = "Enter: back to lobby" if self.mp is not None else "Enter: menu"
         o.text(footer, self.W / 2, self.H - 60, size=18, color=EMBER,
                center=True)
