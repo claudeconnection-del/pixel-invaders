@@ -9,3 +9,4 @@ tools/_*.png
 ghosts.json
 replays/
 exports/
+.superpowers/
