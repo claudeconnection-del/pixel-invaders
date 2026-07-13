@@ -95,16 +95,23 @@ menu — a bot plays the cabinet's games until you press something. Qualifying s
 ## Ghosts, replays & export
 
 Because every game is a **deterministic seeded simulation**, a run is fully captured by its
-seed + input stream (a few KB, not a video). That unlocks three things:
+seed + input stream (a few KB, not a video). That unlocks:
 
 - **Ghost racing** — solo runs race a translucent rival of your personal best (toggle in
   Settings → *Ghost rival*), with a live pace HUD showing whether you're ahead or behind.
-- **Replays** — every run is recorded; the run-end screen lets you **keep** it (`K`).
-- **Export GIF / MP4** — from the run-end screen (`G` / `V`), re-rendered offscreen in a
-  background process → `exports/`. All **client-side** — the home-box server never renders.
-  GIF needs only Pillow; MP4 needs the optional `imageio-ffmpeg` (a bundled ffmpeg), and
-  falls back to GIF if it's absent. Export any saved replay later, too:
-  `python tools/export_replay.py replays/<file>.json --mp4`.
+- **Replay Theater** — every run is recorded; the **REPLAYS** menu entry lists your saved
+  runs, and picking one **plays it back through the live engine**, so you relive it *with its
+  real synthesized music and every sound effect* (a muted GIF can't do that — the re-sim
+  fires the same events, which drive the audio). Pause (`Space`), change speed (`Up/Down`,
+  0.5×–4×), or restart (`R`). Runs are kept as the "last run" per game/mode; press `K` at
+  the run-end screen to hold onto a keeper.
+- **Export GIF / MP4** — from the run-end screen **or** the Replay browser (`G` / `V`),
+  re-rendered offscreen in a background process → `exports/` (press `O` to open that folder).
+  The cabinet reports when the file lands, with its size. All **client-side** — the home-box
+  server never renders. GIF needs only Pillow (one shared palette per clip keeps it fast and
+  small); MP4 needs the optional `imageio-ffmpeg` (a bundled ffmpeg) and falls back to GIF if
+  absent. GIFs are muted by design — the Replay Theater is where the audio lives. Export any
+  saved replay from the shell, too: `python tools/export_replay.py replays/<file>.json --mp4`.
 
 ## Multiplayer
 

@@ -249,6 +249,32 @@ def main():
     print(f"initials + leaderboard OK (entry={board[0]['name']} "
           f"{board[0]['score']})")
 
+    # replay theater: browse the saved replay and watch it back in-engine.
+    # Re-sim playback must advance the run and stay a read-only spectator view
+    # (starts and ends at the menu, so it never disturbs the run-end flow).
+    app.game_id = "voxelhell"
+    app.open_replays()
+    assert app.state == game_main.REPLAYS
+    assert app.replays_list, "replay browser found no replays"
+    render_frame()                          # exercise the browser draw path
+    app.handle_keydown(pygame.K_RETURN)     # watch the newest replay
+    assert app.state == game_main.REPLAYING
+    for _ in range(60 * 6):                 # up to 6s of playback
+        app.update_replay(dt)
+        render_frame()
+        if app.replay_view["done"]:
+            break
+    played = app.replay_view["accum"]
+    assert played > 0, "replay did not advance"
+    app.handle_keydown(pygame.K_SPACE)      # pause toggles cleanly
+    assert app.replay_view["paused"]
+    app.handle_keydown(pygame.K_ESCAPE)     # back to the browser
+    assert app.state == game_main.REPLAYS
+    app.handle_keydown(pygame.K_ESCAPE)     # back to the menu
+    assert app.state == game_main.MENU
+    assert app.replay_view is None, "replay view not released on exit"
+    print(f"replay theater OK (watched {played:.1f}s of a saved run)")
+
     # attract mode: idle in, keypress out, cycles between games on demo death
     app.idle_timer = 999
     for _ in range(3):

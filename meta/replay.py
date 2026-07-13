@@ -57,6 +57,9 @@ class ReplayRecorder:
             "schema": SCHEMA, "game": self.game, "mode": self.mode,
             "seed": self.seed, "analog": self.analog, "score": int(score),
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            # duration is cheap-to-read metadata for the replay browser so it
+            # needn't sum every dt just to label a run's length
+            "duration": round(sum(self.dts), 2),
             "dts": self.dts, "masks": self.masks,
             "analog_data": self.analog_data,
         }
@@ -131,3 +134,43 @@ def keep(data):
     path = os.path.join(REPLAY_DIR, name)
     _atomic_write(path, data)
     return path
+
+
+def _meta(path):
+    """Lightweight metadata for one replay file (for the in-game browser)."""
+    data = load(path)
+    dts = data.get("dts") or []
+    name = os.path.basename(path)
+    return {
+        "path": path,
+        "file": name,
+        "game": data.get("game"),
+        "mode": data.get("mode"),
+        "seed": int(data.get("seed", 0)),
+        "score": int(data.get("score", 0)),
+        "frames": len(dts),
+        "duration": float(data.get("duration") or sum(dts)),
+        "created": data.get("created", ""),
+        # the always-overwritten "last run" copy vs. a player-kept keeper
+        "kept": not name.startswith("last_"),
+        "mtime": os.path.getmtime(path),
+    }
+
+
+def list_for_game(game_id):
+    """All saved replays for a game, newest first, as metadata dicts. Skips
+    unreadable files so a single corrupt replay never breaks the browser."""
+    out = []
+    if not os.path.isdir(REPLAY_DIR):
+        return out
+    for name in os.listdir(REPLAY_DIR):
+        if not name.endswith(".json"):
+            continue
+        try:
+            meta = _meta(os.path.join(REPLAY_DIR, name))
+        except (OSError, ValueError, KeyError):
+            continue
+        if meta["game"] == game_id and meta["frames"] > 0:
+            out.append(meta)
+    out.sort(key=lambda e: e["mtime"], reverse=True)
+    return out

@@ -6,11 +6,13 @@ Cabinet controls:
     Esc - pause / back                   C - CRT filter, M - music
 Game controls are per-game (Voxel Hell: Space fire, Shift focus).
 """
+import copy
 import math
 import os
 import random
 import subprocess
 import sys
+import time
 
 import pygame
 
@@ -52,6 +54,11 @@ ATTRACT = "attract"
 MULTIPLAYER = "multiplayer"
 MP_CODE = "mp_code"
 LOBBY = "lobby"
+REPLAYS = "replays"        # browse saved replays
+REPLAYING = "replaying"    # watch one back in-engine (with real audio)
+
+# replay playback speeds cycled with Up/Down in the theater
+REPLAY_SPEEDS = [0.5, 1.0, 2.0, 4.0]
 
 # Emberlight cabinet palette (see game/theme.py). Screens use semantic tokens
 # (imported up top) so every menu reads as one system.
@@ -59,8 +66,8 @@ EMBER = theme.PRIMARY   # the house colour: titles, score, confirm prompts
 DANGER = theme.DANGER   # loss / locked / offline
 INFO = theme.INFO       # neutral informational accent
 
-MENU_ITEMS = ["PLAY", "MULTIPLAYER", "HANGAR", "SCORES", "ACHIEVEMENTS",
-              "STATS", "SETTINGS", "QUIT"]
+MENU_ITEMS = ["PLAY", "MULTIPLAYER", "HANGAR", "SCORES", "REPLAYS",
+              "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
 
 # (label, settings key, choices) — Left/Right cycles; floats step by 0.1
 SETTINGS_ROWS = [
@@ -103,6 +110,12 @@ def settings_value_label(key, value):
     if isinstance(value, float):
         return f"{int(round(value * 100))}%"
     return str(value).upper()
+
+
+def _fmt_clock(seconds):
+    """Seconds -> M:SS (or Ss under a minute) for replay durations."""
+    s = int(round(seconds))
+    return f"{s // 60}:{s % 60:02d}" if s >= 60 else f"{s}s"
 
 
 class App:
@@ -181,7 +194,11 @@ class App:
         self.run_seed = 0
         self.replay_rec = None
         self.last_replay = None
-        self.export_status = ""     # run-end export feedback
+        self.export_status = ""     # run-end / replay export feedback
+        self.pending_exports = []   # background export subprocesses being polled
+        self.replays_list = []      # metadata for the browser screen
+        self.replays_index = 0
+        self.replay_view = None     # active in-engine playback, or None
 
         # multiplayer session state
         self.mp = None            # {code, seed, game, mode, players, name}
@@ -397,6 +414,52 @@ class App:
                 self.state = MENU
             return
 
+        if self.state == REPLAYS:
+            lst = self.replays_list
+            if key in (pygame.K_UP, pygame.K_w) and lst:
+                self.replays_index = (self.replays_index - 1) % len(lst)
+                audio.play("menu_move")
+            elif key in (pygame.K_DOWN, pygame.K_s) and lst:
+                self.replays_index = (self.replays_index + 1) % len(lst)
+                audio.play("menu_move")
+            elif key == pygame.K_RETURN and lst:
+                self.start_replay(lst[self.replays_index]["path"])
+            elif key == pygame.K_g and lst:
+                self._spawn_export("gif", lst[self.replays_index])
+            elif key == pygame.K_v and lst:
+                self._spawn_export("mp4", lst[self.replays_index])
+            elif key == pygame.K_o:
+                self._open_exports_folder()
+            elif key == pygame.K_ESCAPE:
+                self.state = MENU
+                self.audio.music("menu")
+            return
+
+        if self.state == REPLAYING:
+            rv = self.replay_view
+            if key in (pygame.K_SPACE, pygame.K_RETURN):
+                rv["paused"] = not rv["paused"]
+                audio.play("menu_move")
+            elif key in (pygame.K_UP, pygame.K_w):
+                rv["speed_idx"] = min(len(REPLAY_SPEEDS) - 1, rv["speed_idx"] + 1)
+                audio.play("menu_move")
+            elif key in (pygame.K_DOWN, pygame.K_s):
+                rv["speed_idx"] = max(0, rv["speed_idx"] - 1)
+                audio.play("menu_move")
+            elif key == pygame.K_r:
+                self.start_replay(rv["path"])   # rebuild from the top
+            elif key == pygame.K_g:
+                self._spawn_export("gif", rv["meta"])
+            elif key == pygame.K_v:
+                self._spawn_export("mp4", rv["meta"])
+            elif key == pygame.K_o:
+                self._open_exports_folder()
+            elif key == pygame.K_ESCAPE:
+                self.audio.music(None)
+                self.replay_view = None
+                self.open_replays()
+            return
+
         if self.state == MENU:
             rows = self.menu_rows()
             self.menu_index = min(self.menu_index, len(rows) - 1)
@@ -516,6 +579,8 @@ class App:
                 path = replay_mod.keep(self.last_replay)
                 self.export_status = f"Replay kept: {os.path.basename(path)}"
                 self.audio.play("menu_select")
+            elif key == pygame.K_o:
+                self._open_exports_folder()
 
         # global toggles
         if key == pygame.K_c and self.state != SETTINGS_SCREEN:
@@ -533,6 +598,7 @@ class App:
         actions = [m for m in MENU_ITEMS
                    if (m != "HANGAR" or info.has_skins)
                    and (m != "SCORES" or info.has_scores)
+                   and (m != "REPLAYS" or info.has_scores)
                    and (m != "MULTIPLAYER"
                         or (info.has_scores and self.net.available))]
         return ["CATEGORY", "GAME"] + actions
@@ -579,6 +645,9 @@ class App:
             if self.game.INFO.has_scores:
                 self.board_mode_index = 0
                 self.state = LEADERBOARD
+        elif choice == "REPLAYS":
+            if self.game.INFO.has_scores:
+                self.open_replays()
         elif choice == "ACHIEVEMENTS":
             self.state = ACHIEVEMENTS_SCREEN
         elif choice == "STATS":
@@ -647,25 +716,176 @@ class App:
         info = self.game.INFO
         return info.music_pool if info.game_music else None
 
-    def _spawn_export(self, fmt):
-        """Export the last run to GIF/MP4 in a background process — a fresh
-        GL context, so it never touches the live game and never blocks."""
+    def _repo_dir(self):
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _exports_dir(self):
+        d = os.path.join(self._repo_dir(), "exports")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _open_exports_folder(self):
+        """Reveal exports/ in the OS file manager — so rendered clips are never
+        'lost' (they land in a gitignored folder the player may not think to
+        open)."""
+        d = self._exports_dir()
+        try:
+            if sys.platform == "win32":
+                os.startfile(d)  # noqa: S606 — user-initiated, fixed path
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", d])
+            else:
+                subprocess.Popen(["xdg-open", d])
+            self.export_status = f"Opened {d}"
+        except OSError:
+            self.export_status = f"Exports are in: {d}"
+
+    def _spawn_export(self, fmt, meta=None):
+        """Render a replay to GIF/MP4 in a background process (its own GL
+        context, so it never touches the live game). `meta` picks which replay:
+        None = the just-finished run; otherwise a browser metadata dict. The
+        cabinet polls the process in _poll_exports and reports when it lands."""
         from render import export as export_mod
         if fmt == "mp4" and not export_mod.mp4_available():
             self.export_status = "MP4 needs imageio-ffmpeg — exporting GIF"
             fmt = "gif"
-        path = replay_mod.last_path(self.game_id, self.run_mode)
-        repo = os.path.dirname(os.path.abspath(__file__))
-        args = [sys.executable, os.path.join(repo, "tools", "export_replay.py"),
-                path]
+        if meta is None:
+            path = replay_mod.last_path(self.game_id, self.run_mode)
+            game, mode = self.game_id, self.run_mode
+            score = self.last_replay["score"] if self.last_replay else 0
+        else:
+            path, game, mode, score = (meta["path"], meta["game"],
+                                       meta["mode"], meta["score"])
+        out = os.path.join(self._exports_dir(),
+                           f"{game}_{mode}_{int(score):07d}.{fmt}")
+        # explicit out path keeps the subprocess and this side in agreement so
+        # completion feedback can name (and open) the exact file
+        args = [sys.executable,
+                os.path.join(self._repo_dir(), "tools", "export_replay.py"),
+                path, out]
         if fmt == "mp4":
             args.append("--mp4")
+        else:
+            args += ["--fps", "16"]  # GIFs: fewer frames = faster + smaller
         try:
-            subprocess.Popen(args, cwd=repo)
-            self.export_status = f"Exporting {fmt.upper()} to exports/ ..."
+            proc = subprocess.Popen(args, cwd=self._repo_dir())
+            self.pending_exports.append(
+                {"proc": proc, "fmt": fmt, "out": out, "t0": time.time()})
+            self.export_status = f"Exporting {fmt.upper()}…"
             self.audio.play("menu_select")
         except OSError:
             self.export_status = "Export failed to start"
+
+    def _poll_exports(self):
+        """Advance background exports: name finished files, flag failures, and
+        show a live elapsed timer so a slow render never looks like a hang."""
+        if not self.pending_exports:
+            return
+        still, done_msg = [], None
+        for e in self.pending_exports:
+            rc = e["proc"].poll()
+            if rc is None:
+                still.append(e)
+                continue
+            if rc == 0 and os.path.exists(e["out"]):
+                kb = os.path.getsize(e["out"]) / 1024
+                size = f"{kb / 1024:.1f} MB" if kb >= 1024 else f"{kb:.0f} KB"
+                done_msg = (f"Saved {os.path.basename(e['out'])} ({size})"
+                            "   ·   O: open folder")
+                self.audio.play("toast")
+            else:
+                done_msg = f"{e['fmt'].upper()} export failed — see terminal"
+                self.audio.play("menu_move")
+        self.pending_exports = still
+        if still:  # something's still rendering: keep the timer alive
+            secs = int(time.time() - min(e["t0"] for e in still))
+            self.export_status = f"Exporting {still[0]['fmt'].upper()}… ({secs}s)"
+        elif done_msg:
+            self.export_status = done_msg
+
+    # ------------------------------------------------------- replay theater
+    def _pool_for(self, module):
+        info = module.INFO
+        return info.music_pool if info.game_music else None
+
+    def open_replays(self):
+        """Enter the replay browser for the current game (newest first)."""
+        self.replays_list = replay_mod.list_for_game(self.game_id)
+        self.replays_index = 0
+        self.export_status = ""
+        self.state = REPLAYS
+        self.audio.music("menu")
+
+    def start_replay(self, path):
+        """Watch a saved run back through the live engine. Because the sim is
+        re-run for real, its events fire the real music + sound effects — the
+        point of the theater is to relive the run *with* its audio, not a mute
+        clip. Playback is spectator-only: a deep-copied profile section and a
+        no-op save keep it from touching stats, achievements, or ghosts."""
+        try:
+            data = replay_mod.load(path)
+        except (OSError, ValueError):
+            self.export_status = "Replay file could not be read"
+            return
+        rep = replay_mod.Replay(data)
+        module = self.games.get(rep.game)
+        if module is None:
+            return
+        run = module.create_run(rep.mode, random.Random(rep.seed))
+        section = copy.deepcopy(profile_mod.game_section(self.profile, rep.game))
+        if hasattr(run, "attach_profile"):
+            run.attach_profile(section, self.profile["settings"], lambda: None)
+        self.replay_view = {
+            "path": path,
+            "meta": replay_mod._meta(path),
+            "module": module, "run": run, "section": section,
+            "gen": rep.frames(), "accum": 0.0, "clock": 0.0,
+            "duration": rep.duration, "mode": rep.mode, "score": rep.score,
+            "speed_idx": 1, "paused": False, "done": False,
+        }
+        self.wave_banner = None
+        self.toasts.clear()
+        self.state = REPLAYING
+        if module.INFO.mouse_look:
+            pygame.mouse.get_rel()  # discard menu motion; the camera is scripted
+        self.audio.music(self._pool_for(module))
+
+    def update_replay(self, dt):
+        """Drive playback at wall-clock speed regardless of display fps: advance
+        the recorded frame stream until its cumulative sim time catches up to
+        real elapsed time (× the chosen speed). Same events → same audio."""
+        rv = self.replay_view
+        if rv is None or rv["done"] or rv["paused"]:
+            return
+        run = rv["run"]
+        rv["clock"] += dt * REPLAY_SPEEDS[rv["speed_idx"]]
+        guard = 0
+        while rv["accum"] < rv["clock"] and not rv["done"]:
+            try:
+                rdt, rinp = next(rv["gen"])
+            except StopIteration:
+                rv["done"] = True
+                break
+            run.update(rdt, rinp)
+            rv["accum"] += rdt
+            for etype, data in run.drain_events():
+                run.on_event(etype, data, self.renderer, self.audio,
+                             self.post_banner)
+                if etype == ev.BOSS_SPAWN:
+                    self.audio.music("boss")
+                elif etype == ev.BOSS_KILLED:
+                    self.audio.music(self._pool_for(rv["module"]))
+                elif etype == ev.RUN_END:
+                    rv["done"] = True
+            if hasattr(run, "per_frame_particles"):
+                run.per_frame_particles(self.renderer, random)
+            if getattr(run, "run_over", False):
+                rv["done"] = True
+            guard += 1
+            if guard > 6000:  # safety valve against a runaway stream
+                break
+        if rv["done"]:
+            self.audio.music(None)
 
     # ------------------------------------------------------------- initials
     def _cycle_initial(self, direction):
@@ -1214,8 +1434,9 @@ class App:
             o.text("NEW BEST!", self.W / 2, 240, size=22, color=EMBER, center=True)
         # replay export offer (recorded runs only)
         if self.last_replay is not None:
-            o.text("G: export GIF    V: export MP4    K: keep replay",
-                   self.W / 2, self.H - 96, size=15, color=DIM, center=True)
+            o.text("G: export GIF    V: export MP4    K: keep replay    "
+                   "O: open exports", self.W / 2, self.H - 96, size=15,
+                   color=DIM, center=True)
         if self.export_status:
             o.text(self.export_status, self.W / 2, self.H - 122, size=15,
                    color=theme.GOOD, center=True)
@@ -1378,6 +1599,90 @@ class App:
                center=True)
         self.draw_banner_and_toasts()
 
+    def draw_replays(self):
+        o = self.renderer.overlay
+        accent = theme.for_game(self.game_id).accent
+        o.text(f"{self.game.INFO.name} — REPLAYS", self.W / 2, 66, size=32,
+               color=EMBER, center=True)
+        o.text("Watch a saved run back — with its real music and sound",
+               self.W / 2, 112, size=14, color=DIM, center=True)
+
+        lst = self.replays_list
+        if not lst:
+            o.text("NO REPLAYS YET — PLAY A RUN", self.W / 2, self.H / 2,
+                   size=22, color=DIM, center=True)
+        modes = dict(self.game.INFO.modes)
+        panel_x = self.W / 2 - 420
+        top, row_h, maxrows = 168, 46, 10
+        start = max(0, min(self.replays_index - maxrows // 2,
+                           max(0, len(lst) - maxrows)))
+        for vi, entry in enumerate(lst[start:start + maxrows]):
+            i = start + vi
+            y = top + vi * row_h
+            selected = i == self.replays_index
+            if selected:
+                o.rect(panel_x - 12, y - 8, 864, 40, PANEL_SEL)
+            col = TEXT if selected else DIM
+            mode_label = modes.get(entry["mode"], entry["mode"].upper())
+            dur = _fmt_clock(entry["duration"])
+            o.text(("> " if selected else "  ") + mode_label, panel_x, y,
+                   size=20, color=accent if selected else col)
+            o.text(f"{entry['score']:,}", panel_x + 250, y, size=20, color=col)
+            o.text(dur, panel_x + 430, y, size=18, color=DIM)
+            o.text(entry["created"][:10], panel_x + 545, y, size=15, color=DIM)
+            o.text("KEPT" if entry["kept"] else "LAST", panel_x + 735, y,
+                   size=14, color=GOLD if entry["kept"] else theme.FAINT)
+
+        o.text("Enter: watch   G: GIF   V: MP4   O: open exports   Esc: back",
+               self.W / 2, self.H - 78, size=15, color=EMBER, center=True)
+        o.text("exports → " + os.path.join(self._repo_dir(), "exports"),
+               self.W / 2, self.H - 52, size=12, color=theme.FAINT, center=True)
+        if self.export_status:
+            o.text(self.export_status, self.W / 2, self.H - 30, size=14,
+                   color=theme.GOOD, center=True)
+
+    def draw_replay_overlay(self):
+        o = self.renderer.overlay
+        rv = self.replay_view
+        if self.renderer.camera_override is None:
+            hud_w = min(self.W, 1460)
+            o.offset_x = (self.W - hud_w) / 2
+        else:
+            hud_w = self.W
+        rv["run"].draw_hud(o, hud_w, self.H, rv["section"])
+        o.offset_x = 0.0
+        self.draw_banner_and_toasts()
+
+        speed = REPLAY_SPEEDS[rv["speed_idx"]]
+        head = "PAUSED" if rv["paused"] else ("COMPLETE" if rv["done"]
+                                              else "REPLAY")
+        if speed != 1.0 and not rv["paused"] and not rv["done"]:
+            head += f"   {speed:g}x"
+        o.rect(self.W / 2 - 150, 24, 300, 34, PANEL)
+        o.text(head, self.W / 2, 30, size=20, color=GOLD, center=True)
+
+        by = self.H - 92
+        bar_w = min(self.W - 120, 900)
+        bx = (self.W - bar_w) / 2
+        frac = 0.0 if rv["duration"] <= 0 else min(1.0, rv["accum"] / rv["duration"])
+        o.rect(bx, by, bar_w, 8, BAR_BG)
+        o.rect(bx, by, bar_w * frac, 8, EMBER)
+        o.text(f"{_fmt_clock(rv['accum'])} / {_fmt_clock(rv['duration'])}",
+               self.W / 2, by - 22, size=14, color=DIM, center=True)
+
+        if rv["done"]:
+            o.text("REPLAY COMPLETE", self.W / 2, self.H * 0.32, size=30,
+                   color=EMBER, center=True)
+            o.text("R: watch again   G/V: export   O: open exports   Esc: back",
+                   self.W / 2, self.H - 54, size=16, color=EMBER, center=True)
+        else:
+            o.text("Space: pause   Up/Down: speed   R: restart   "
+                   "G/V: export   Esc: back", self.W / 2, self.H - 54,
+                   size=15, color=DIM, center=True)
+        if self.export_status:
+            o.text(self.export_status, self.W / 2, self.H - 30, size=14,
+                   color=theme.GOOD, center=True)
+
     def draw_attract_overlay(self):
         o = self.renderer.overlay
         module = self.games[self.attract_gid]
@@ -1417,6 +1722,9 @@ class App:
         elif self.state in (PLAYING, PAUSED, RUN_END, INITIALS) \
                 and self.run is not None:
             self.run.draw(self.renderer, self.section)
+        elif self.state == REPLAYING and self.replay_view is not None:
+            rv = self.replay_view
+            rv["run"].draw(self.renderer, rv["section"])
         elif self.state == MENU:
             aspect = self.renderer.width / self.renderer.height
             if aspect >= 1.25:  # narrow/square screens: menu panel only
@@ -1493,6 +1801,10 @@ class App:
             self.draw_mp_code()
         elif self.state == LOBBY:
             self.draw_lobby()
+        elif self.state == REPLAYS:
+            self.draw_replays()
+        elif self.state == REPLAYING:
+            self.draw_replay_overlay()
         elif self.state == ATTRACT:
             self.draw_attract_overlay()
         if self.profile["settings"].get("show_fps"):
@@ -1526,6 +1838,7 @@ class App:
 
             self.poll_pad_navigation(dt)
             self.poll_network()
+            self._poll_exports()
             self.outbox_timer -= dt
             if self.outbox_timer <= 0:
                 self.outbox_timer = 60.0
@@ -1538,6 +1851,8 @@ class App:
             self.update_timers(dt)
             if self.state == PLAYING:
                 self.update_playing(dt)
+            elif self.state == REPLAYING:
+                self.update_replay(dt)
             elif self.state == ATTRACT:
                 self.update_attract(dt)
             elif self.state == MENU:
@@ -1549,9 +1864,11 @@ class App:
             # mouse-look games (Doom) also grab so relative motion keeps
             # coming and the cursor can't wander off the window
             info = self.game.INFO
-            playing_fps = self.state == PLAYING and (info.mouse_aim
-                                                     or info.mouse_look)
-            pygame.mouse.set_visible(not playing_fps)
+            # hide the pointer for first-person views (live or replayed); only
+            # a live run grabs the mouse — a replay is a scripted spectator view
+            watching_fps = self.state in (PLAYING, REPLAYING) and (
+                info.mouse_aim or info.mouse_look)
+            pygame.mouse.set_visible(not watching_fps)
             pygame.event.set_grab(self.state == PLAYING and info.mouse_look)
 
             self.renderer.begin(dt if self.state != PAUSED else 0.0)

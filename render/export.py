@@ -137,17 +137,35 @@ def export(replay, out_path, fmt="gif", fps=DEFAULT_FPS, full=False, crt=True):
 
 
 def _write_gif(frames, out_path, fps):
+    """Encode with ONE shared palette for the whole clip instead of a fresh
+    adaptive palette per frame. That's the big speed win — per-frame ADAPTIVE
+    quantization plus optimize=True was the multi-second cost — and a stable
+    palette also stops colours shimmering frame to frame. The palette is built
+    from a handful of evenly-spaced frames so late-run colours (bosses, new
+    enemies) are represented, not just frame zero's."""
     from PIL import Image
     scale = min(1.0, GIF_MAX_W / frames[0].shape[1])
-    imgs = []
-    for f in frames:
+
+    def to_rgb(f):
         im = Image.fromarray(f, "RGB")
         if scale < 1.0:
-            im = im.resize((int(im.width * scale), int(im.height * scale)),
-                           Image.BILINEAR)
-        imgs.append(im.convert("P", palette=Image.ADAPTIVE, colors=128))
+            im = im.resize((max(1, int(im.width * scale)),
+                            max(1, int(im.height * scale))), Image.BILINEAR)
+        return im
+
+    rgb = [to_rgb(f) for f in frames]
+
+    # representative palette: stack up to 12 sampled frames and quantize once
+    step = max(1, len(rgb) // 12)
+    sample = rgb[::step]
+    strip = Image.new("RGB", (sample[0].width, sample[0].height * len(sample)))
+    for i, im in enumerate(sample):
+        strip.paste(im, (0, i * sample[0].height))
+    palette = strip.quantize(colors=128, method=Image.FASTOCTREE)
+
+    imgs = [im.quantize(palette=palette, dither=Image.NONE) for im in rgb]
     imgs[0].save(out_path, save_all=True, append_images=imgs[1:],
-                 duration=int(1000 / fps), loop=0, optimize=True, disposal=2)
+                 duration=int(1000 / fps), loop=0, disposal=2)
 
 
 def _write_mp4(frames, out_path, fps):
