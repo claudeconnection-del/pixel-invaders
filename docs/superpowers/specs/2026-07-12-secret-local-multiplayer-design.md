@@ -195,3 +195,22 @@ share-to-leaderboard all work unchanged for secret-local matches.
 4. `games/battleship/game.py` (`BoardRun` + public renderer + missile-arc animation) + the lobby/QR
    overlay and waiting/failure states; register the `BOARD` category.
 5. Replay-recording hook for secret-local matches; `/verify` end-to-end pass on the cabinet.
+
+## Implementation status (2026-07-12)
+
+Shipped on branch `secret-local-multiplayer` (plan: `docs/superpowers/plans/2026-07-12-secret-local-multiplayer.md`).
+**SECRET LOCAL is fully implemented and headless-tested**; VS-AI and HOTSEAT are deferred
+follow-ups (the run + renderer are structured to add them). Deviations from this design as
+first written:
+
+- **Replay is richer than the "free" claim.** It is *not* the existing input-bitmask replay
+  reused — that records held keys and doesn't fit move-driven board games. Instead
+  `games/board/replay.py` records a **move stream** and offers **per-perspective playback**:
+  rewatch a finished match as P1, as P2 (each hiding what was hidden to *them* at that step),
+  or as an omniscient Director. Verified in `tools/test_companion.py` (secrecy holds through
+  time per perspective).
+- **One small `main.py` edit** beyond the "registration only" estimate: a guarded
+  `run.close()` call in `abandon_run` so the host server/port is released on exit.
+- **New dependency `segno`** (pure-Python QR; degrades to a text code if absent).
+- Cabinet input for a would-be VS-AI/HOTSEAT mode is unbuilt (secret-local needs none — the
+  phones are the controllers).
