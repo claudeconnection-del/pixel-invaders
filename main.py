@@ -77,7 +77,7 @@ _AMBIENT_SCENE_IDS = list(ambient_scenes.SCENES)
 _AMBIENT_PALETTES = [(p.name, [list(c) for c in p.palette])
                      for p in ambient_preset.DEFAULTS]
 _AMBIENT_DENSITIES = ["low", "medium", "high"]
-_AMBIENT_SOUNDS = ["silence", "music:menu", "music:game"]  # beds added in I5
+_AMBIENT_SOUNDS = ["silence", "bed:ambient", "music:menu", "music:game"]
 _AMBIENT_MAX_CUSTOM = 6
 
 # Emberlight cabinet palette (see game/theme.py). Screens use semantic tokens

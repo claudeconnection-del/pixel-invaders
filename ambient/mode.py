@@ -43,13 +43,14 @@ class AmbientMode:
 
     # ------------------------------------------------------------ sound
     def start_sound(self, audio):
-        """Begin the preset's soundscape. `bed:<id>` beds arrive in I5; until
-        then they fall back to silence."""
+        """Begin the preset's soundscape: silence, an existing music pool
+        (`music:<pool>`), or a calm ambient bed (`bed:*` → the shuffling
+        'ambient' pool of generated beds)."""
         snd = self.preset.sound or "silence"
         if snd.startswith("music:"):
             audio.music(snd.split(":", 1)[1])
         elif snd.startswith("bed:"):
-            audio.music(None)  # I5: real ambient beds
+            audio.music("ambient")
         else:
             audio.music(None)
 

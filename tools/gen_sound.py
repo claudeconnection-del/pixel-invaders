@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from game.composer import (  # noqa: E402
     SectionSpec, build_section, chord_tones, concat, decay, drum_track,
-    envelope, midi, mix, noise, note_track, square_wave, sweep, write_wav,
-    PROGRESSIONS, REST,
+    envelope, midi, mix, noise, note_track, square_wave, sweep, triangle_wave,
+    write_wav, PROGRESSIONS, REST,
 )
 
 BASE_DIR = os.path.join(os.path.dirname(__file__), "..")
@@ -134,6 +134,32 @@ def build_metal_section(rng, bars=8):
     return envelope(mix(*layers), attack=0.002, release=0.004)
 
 
+# ----------------------------------------------------------------- ambient
+# Calm "beds" for ambient mode: slow, breathing chord pads (sustained triangle
+# tones with long attack/release so chords swell and cross near silence) plus a
+# faint two-octave-up shimmer. No drums, no melody — just warmth. They form the
+# "ambient" music pool (assets/music/ambient_XX.wav), auto-discovered by the
+# AudioBank sequencer and played when a preset's sound is "bed:*".
+AMBIENT_BEDS = [
+    ("Am F C G", 48, 0.14),   # hearth — warm and low
+    ("F G Am", 55, 0.12),     # drift — airier, a little higher
+]
+
+
+def build_ambient_bed(progression_name, base, amp, chord_dur=5.0):
+    prog = PROGRESSIONS[progression_name]
+    chunks = []
+    for root, is_minor in prog:
+        tones = chord_tones(root, is_minor, base=base)
+        layers = [envelope(triangle_wave(midi(t), chord_dur, amp),
+                           attack=0.28, release=0.4) for t in tones]
+        layers.append(envelope(  # airy shimmer two octaves up, very soft
+            triangle_wave(midi(tones[0] + 24), chord_dur, amp * 0.18),
+            attack=0.45, release=0.45))
+        chunks.append(mix(*layers))
+    return concat(*chunks)
+
+
 def build_menu_section(rng, bars=4):
     """Calm arpeggio variant (not SectionSpec-shaped: no drums, slow)."""
     eighth = 60 / MENU_BPM / 2
@@ -222,6 +248,9 @@ def main():
     metal_rng = random.Random(MUSIC_SEED + 1)
     for i in range(6):
         out(MUSIC_DIR, f"metal_{i:02d}.wav", build_metal_section(metal_rng))
+    for i, (prog, base, amp) in enumerate(AMBIENT_BEDS):
+        out(MUSIC_DIR, f"ambient_{i:02d}.wav",
+            build_ambient_bed(prog, base, amp))
 
 
 if __name__ == "__main__":

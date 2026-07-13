@@ -335,7 +335,16 @@ def main():
     assert amb["counters"]["idle_entries"] == idle_before + 1
     app.handle_keydown(pygame.K_RETURN)
     assert app.state == game_main.MENU
-    print(f"ambient mode OK (manual + idle entries, "
+
+    # sound: generated beds form a discoverable 'ambient' pool; a bed-backed
+    # preset routes there (silence / music:<pool> handled the same way)
+    assert len(app.audio.pools.get("ambient", [])) == 2, "ambient beds missing"
+    amb["current"] = "fireplace"          # its default sound is bed:ambient
+    app.start_ambient(auto=False)
+    assert app.audio.current_pool == "ambient", "bed preset did not play the pool"
+    app.handle_keydown(pygame.K_SPACE)
+    assert app.state == game_main.MENU
+    print(f"ambient mode OK (manual + idle + bed pool, "
           f"{amb['counters']['total_seconds']:.1f}s logged)")
 
     pygame.quit()

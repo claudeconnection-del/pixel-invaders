@@ -58,7 +58,7 @@ DEFAULTS = [
                   speed=0.4, density="medium", dim=0.2),
     AmbientPreset("fireplace", "Fireplace", "fireplace",
                   [_rgb(theme.EMBER), _rgb(theme.RUST), _rgb(theme.HONEY)],
-                  speed=1.1, density="medium", dim=0.1),
+                  speed=1.1, density="medium", dim=0.1, sound="bed:ambient"),
     # Premium — hidden until a flagship (non-multiplayer) achievement unlocks it.
     # Unlock ids are confirmed against each game's ACHIEVEMENTS in the unlock-
     # wiring increment; kept as intent-named placeholders here.
