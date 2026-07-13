@@ -2,8 +2,9 @@
 a worker thread and never blocks a frame; failures degrade silently to
 offline. Results are collected via poll() on the main thread.
 
-Server URL comes from settings.server_url or the PIXEL_INVADERS_SERVER env
-var (env wins). Empty = offline mode.
+Server URL comes from settings.server_url or the CABINET_MAN_SERVER env var
+(env wins; the old PIXEL_INVADERS_SERVER name is still honored). Empty =
+offline mode.
 """
 import json
 import os
@@ -17,9 +18,13 @@ TIMEOUT_S = 4
 
 class ArcadeClient:
     def __init__(self, base_url="", api_key=""):
-        env = os.environ.get("PIXEL_INVADERS_SERVER", "")
+        # new CABINET_MAN_* names win; old PIXEL_INVADERS_* still work so
+        # existing game machines don't need reconfiguring after the rename
+        env = (os.environ.get("CABINET_MAN_SERVER")
+               or os.environ.get("PIXEL_INVADERS_SERVER", ""))
         self.base_url = (env or base_url or "").rstrip("/")
-        self.api_key = api_key or os.environ.get("PIXEL_INVADERS_API_KEY", "")
+        self.api_key = (api_key or os.environ.get("CABINET_MAN_API_KEY")
+                        or os.environ.get("PIXEL_INVADERS_API_KEY", ""))
         self.results = queue.Queue()
 
     @property

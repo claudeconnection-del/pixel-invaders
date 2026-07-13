@@ -50,6 +50,6 @@ def render_scoreboard(game, mode, scores):
   <h1>{html.escape(title)}</h1>
   <h2>{html.escape(mode.upper())} — HIGH SCORES</h2>
   <table>{rows}</table>
-  <div class="foot">PIXEL INVADERS ARCADE</div>
+  <div class="foot">CABINET MAN</div>
 </div>
 </body></html>"""

@@ -1,4 +1,4 @@
-"""Pixel Invaders Arcade backend: global leaderboards + daily seeds.
+"""Cabinet Man backend: global leaderboards + daily seeds.
 
 A small FastAPI service meant to run in one container on a home box.
 
@@ -31,7 +31,7 @@ NAME_RE = re.compile(r"^[A-Z0-9 ]{1,3}$")
 PLAYER_RE = re.compile(r"^[A-Z0-9 ]{1,8}$")
 CODE_RE = re.compile(r"^[A-Z0-9]{4}$")
 
-app = FastAPI(title="Pixel Invaders Arcade API", version="1.0.0")
+app = FastAPI(title="Cabinet Man API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -85,6 +85,8 @@ def get_boards():
 def get_daily():
     """Deterministic daily seed for future daily-challenge runs."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # NB: the salt stays "pixel-invaders" on purpose — it's an internal hash
+    # input, not a display name; changing it would shift every daily seed.
     seed = int.from_bytes(
         hashlib.sha256(f"pixel-invaders:{today}".encode()).digest()[:8], "big")
     return {"date": today, "seed": seed}

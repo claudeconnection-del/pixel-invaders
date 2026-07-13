@@ -44,6 +44,7 @@ def drain(client, want, timeout_s=8):
 def main():
     env = dict(os.environ)
     env["ARCADE_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "itest.db")
+    env.pop("CABINET_MAN_SERVER", None)
     env.pop("PIXEL_INVADERS_SERVER", None)
     server = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.app:app",

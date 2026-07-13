@@ -22,7 +22,7 @@ services:
       # ARCADE_CORS_ORIGINS: "https://chomey.org,https://www.chomey.org"
       ARCADE_CORS_ORIGINS: "*"
       # require a key for score submissions (set the same key in the game
-      # via the PIXEL_INVADERS_API_KEY env var):
+      # via the CABINET_MAN_API_KEY env var; old PIXEL_INVADERS_API_KEY works):
       # ARCADE_API_KEY: "pick-something"
     mem_limit: 256m
     cpus: 0.5

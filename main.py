@@ -1,5 +1,7 @@
-"""Pixel Invaders arcade cabinet — a multi-game 8-bit voxel arcade built with
-pygame-ce + PyOpenGL. All art and audio generated from code.
+"""Cabinet Man — a multi-game 8-bit voxel arcade cabinet built with pygame-ce
++ PyOpenGL. All art and audio generated from code. Lit in Emberlight.
+
+(Named for Neil Cicierga's "Cabinet Man": the machine that plays itself.)
 
 Cabinet controls:
     Arrows / WASD - navigate + play      Enter - confirm
@@ -34,6 +36,7 @@ from meta.achievements import AchievementEngine
 from meta.outbox import Outbox
 from meta.stats import StatsTracker
 
+APP_NAME = "Cabinet Man"  # the product; "Emberlight" is its look (game/theme.py)
 WINDOW_W, WINDOW_H = 1280, 860
 ATTRACT_IDLE_SECONDS = 15.0
 INITIALS_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
@@ -125,7 +128,7 @@ class App:
             pygame.mixer.init()
         except pygame.error:
             pass
-        pygame.display.set_caption("Pixel Invaders Arcade")
+        pygame.display.set_caption(APP_NAME)
         self.clock = pygame.time.Clock()
 
         self.profile = profile_mod.load()
@@ -1234,7 +1237,7 @@ class App:
         info = self.game.INFO
         accent = theme.for_game(self.game_id).accent
 
-        title = "PIXEL INVADERS ARCADE"
+        title = APP_NAME.upper()
         o.text(title, self.W / 2, 64, size=44, color=EMBER, center=True)
         # ember sparks flanking the title + a quiet family subtitle
         pulse = int(190 + 60 * math.sin(self.renderer.time * 2.2))

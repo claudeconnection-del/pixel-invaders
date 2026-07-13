@@ -1,4 +1,5 @@
-# Pixel Invaders Arcade backend — build from the repo root:
+# Cabinet Man backend — build from the repo root (image slug kept as
+# pixel-invaders-arcade for deployment continuity):
 #   docker build -f server/Dockerfile -t pixel-invaders-arcade .
 FROM python:3.13-slim
 

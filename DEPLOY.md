@@ -13,7 +13,7 @@ Ubuntu box**. It is self-contained; Claude will ask you for a GitHub PAT
 (classic, `read:packages` scope) when it needs one.
 
 ```text
-Set up the Pixel Invaders arcade backend on this machine as a LAN-local
+Set up the Cabinet Man arcade backend on this machine as a LAN-local
 Docker service. It's a private GHCR image; nothing here should be exposed
 beyond the local network (no tunnels, no public ports).
 
@@ -60,8 +60,8 @@ Steps:
    - the update command: cd ~/arcade && docker compose pull && docker compose up -d
    - the two endpoints chomey.org tooling can poll locally:
      /api/v1/scores?game=<id>&mode=<id> (JSON) and /scoreboard?... (HTML)
-   - a reminder that game machines set PIXEL_INVADERS_SERVER=http://<lan-ip>:8083
-     (or settings.server_url in profile.json)
+   - a reminder that game machines set CABINET_MAN_SERVER=http://<lan-ip>:8083
+     (old PIXEL_INVADERS_SERVER still works; or settings.server_url in profile.json)
 
 Don't create any cron jobs or auto-updaters — I update manually. Don't
 change any other firewall rules or system settings.
@@ -150,11 +150,12 @@ re-run the workflow from the repo's Actions tab (workflow_dispatch).
 On each machine that plays (desktop, MacBook), set once:
 
 ```
-PIXEL_INVADERS_SERVER=http://<box-lan-ip>:8083
+CABINET_MAN_SERVER=http://<box-lan-ip>:8083
 ```
 
-(or `settings.server_url` in `profile.json`). The SCORES screens gain a
-GLOBAL tab and MULTIPLAYER appears in the menu.
+(or `settings.server_url` in `profile.json`; the old `PIXEL_INVADERS_SERVER`
+name still works). The SCORES screens gain a GLOBAL tab and MULTIPLAYER
+appears in the menu.
 
 **Playing away from home?** Scores earned offline are queued in a local
 outbox and submitted automatically the next time the game can reach the API
@@ -178,7 +179,8 @@ Valid game/mode pairs: `voxelhell/campaign`, `voxelhell/endless`,
 Set in `docker-compose.yml` (then `docker compose up -d`):
 
 - `ARCADE_API_KEY: "something"` — score/session POSTs require the key; set
-  `PIXEL_INVADERS_API_KEY` to the same value on the game machines.
+  `CABINET_MAN_API_KEY` (old `PIXEL_INVADERS_API_KEY` still works) to the same
+  value on the game machines.
 - `ARCADE_CORS_ORIGINS: "https://chomey.org"` — restrict browser reads.
 
 ## API quick reference

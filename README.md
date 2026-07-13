@@ -1,4 +1,7 @@
-# Pixel Invaders Arcade
+# Cabinet Man
+
+*Named for Neil Cicierga's "Cabinet Man" — the machine that plays itself. (The repo/image
+slug stays `pixel-invaders` for deployment continuity; **Emberlight** is the look, below.)*
 
 A multi-game **8-bit voxel arcade cabinet** in Python: three enhanced classics rendered with
 raw OpenGL (voxel sprites, GPU particles, bloom + CRT post-processing), with achievements,
@@ -151,14 +154,17 @@ curl http://localhost:8083/healthz
 ```
 
 Scores live in the `arcade-data` volume. Optional env: `ARCADE_API_KEY` (require a key for
-submissions; set `PIXEL_INVADERS_API_KEY` in the game's environment to match) and
+submissions; set `CABINET_MAN_API_KEY` in the game's environment to match) and
 `ARCADE_CORS_ORIGINS` (lock browser reads to `https://chomey.org`).
 
 ### Point the game at it
 
 Set `settings.server_url` in `profile.json` (e.g. `"http://ubuntu-box:8083"`) or the
-`PIXEL_INVADERS_SERVER` env var. The SCORES screen gains a LOCAL/GLOBAL toggle and initials
+`CABINET_MAN_SERVER` env var. The SCORES screen gains a LOCAL/GLOBAL toggle and initials
 submissions upload automatically (with a global-rank toast).
+
+> The env vars were `PIXEL_INVADERS_SERVER` / `PIXEL_INVADERS_API_KEY` before the rename;
+> those names are still honored, so existing game machines keep working untouched.
 
 ## How it's built
 
