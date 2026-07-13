@@ -264,6 +264,43 @@ def test_run_wiring():
     print(f"run wiring OK (winner={run.model.winner})")
 
 
+def test_board_replay_perspectives():
+    """Record a match, then verify per-perspective playback: rebuild is
+    deterministic, each player's view never leaks the opponent's hidden ships
+    at ANY step (the secrecy invariant, through time), and DIRECTOR reveals
+    both fleets."""
+    from games.board.replay import BoardReplayRecorder, BoardReplay
+
+    rec = BoardReplayRecorder("battleship", "secret", seed=5)
+    m = BattleshipModel(random.Random(5))
+    for seat, ls in (("P1", 11), ("P2", 22)):
+        layout = _auto_layout(random.Random(ls))
+        for s in layout:
+            m.place_ship(seat, s["name"], s["size"], s["x"], s["y"], s["horizontal"])
+        rec.placement(seat, layout)
+    m.begin_fire("P1")
+    while m.winner is None:
+        seat = m.turn
+        x, y = ai_fire(m)
+        m.fire(seat, x, y)
+        rec.move(seat, x, y)
+
+    rp = BoardReplay(rec.build(m.winner))
+    assert rp.rebuild_to(rp.total).winner == m.winner, "replay not deterministic"
+
+    for step in range(rp.total + 1):
+        mm = rp.rebuild_to(step)
+        for who in ("P1", "P2"):
+            v = rp.view(step, who)
+            other = OTHER[who]
+            leaked = _cells_about(v["boards"][other]) & _unhit_unsunk_cells(mm, other)
+            assert not leaked, f"replay view {who} leaked {other} at step {step}"
+        director = rp.view(step, "director")
+        assert "fleets" in director and len(director["fleets"]["P1"]) == 5 \
+            and len(director["fleets"]["P2"]) == 5, "director should reveal both fleets"
+    print(f"board replay perspectives OK ({rp.total} moves)")
+
+
 def test_registration():
     """The cabinet registry imports battleship and exposes the game contract."""
     from games import load_games, GAME_IDS, category_of
@@ -282,6 +319,7 @@ def main():
     test_full_game_via_session()
     test_server_loopback()
     test_run_wiring()
+    test_board_replay_perspectives()
     test_registration()
     print("ALL COMPANION TESTS PASSED")
 

@@ -23,6 +23,7 @@ from games.board.anim import Anim, AnimQueue, ease_out, lerp
 from games.board.companion import qr
 from games.board.companion.server import CompanionServer, DEFAULT_PORT
 from games.board.companion.session import SecretLocalSession
+from games.board.replay import BoardReplay, BoardReplayRecorder, save as _save_replay
 from games.battleship.model import BattleshipModel, PLAYERS
 
 _APP_HTML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -34,6 +35,7 @@ _SEA_LINE = (40, 62, 84, 255)
 _MISS = (120, 120, 120, 255)
 _HIT = RUST
 _SUNK = (150, 54, 62, 255)
+_SHIP = (91, 155, 213, 255)     # own/revealed ship (replay only; never live public)
 
 
 def _shot_markers(model, target):
@@ -155,13 +157,36 @@ class BattleshipRun(GameRun):
         self.settings = None
         self.save_cb = lambda: None
 
-        # secret-local infra
+        # match recorder (feeds the per-perspective replay)
+        self._rec = BoardReplayRecorder("battleship", self.mode)
+        self._last_replay = None
+
+        # secret-local infra — hooks also record placements/moves as they apply
+        def _apply(model, seat, action):
+            res = _apply_move(model, seat, action)
+            if res is not None:
+                self._rec.move(seat, action["x"], action["y"])
+            return res
+
+        def _ready(model, seat, action):
+            ok = _commit_fleet(model, seat, action)
+            if ok:
+                self._rec.placement(seat, action.get("layout") or [])
+            return ok
+
         self.session = SecretLocalSession(
-            self.model, secret_fn=secret_view, apply_fn=_apply_move,
-            ready_fn=_commit_fleet, begin_fn=_begin_fire, rng=rng)
+            self.model, secret_fn=secret_view, apply_fn=_apply,
+            ready_fn=_ready, begin_fn=_begin_fire, rng=rng)
         self.server = None
         self.host_error = None
         self._qr_surf = None
+
+        # replay rewatch state (entered with R on the over screen)
+        self.replay = None
+        self.replay_step = 0
+        self.perspective = "P1"
+        self.replay_playing = False
+        self._replay_timer = 0.0
 
         # cached snapshots for draw (built each update on the game thread)
         self._public = public_view(self.model)
@@ -196,7 +221,37 @@ class BattleshipRun(GameRun):
         return {"win": self.model.winner is not None}
 
     def handle_key(self, key):
-        return False        # phones drive; the cabinet takes no game input here
+        # During play the phones drive; the cabinet only takes keys on the
+        # over screen, to enter/steer the per-perspective replay.
+        import pygame
+        if self.model.phase != "over":
+            return False
+        if self.replay is None:
+            if key == pygame.K_r and self._last_replay is not None:
+                self.replay = BoardReplay(self._last_replay)
+                self.replay_step = self.replay.total
+                self.perspective = "P1"
+                self.replay_playing = False
+            return True
+        if key == pygame.K_r:
+            self.replay = None
+        elif key == pygame.K_1:
+            self.perspective = "P1"
+        elif key == pygame.K_2:
+            self.perspective = "P2"
+        elif key == pygame.K_3:
+            self.perspective = "director"
+        elif key in (pygame.K_LEFT, pygame.K_a):
+            self.replay_step = max(0, self.replay_step - 1)
+            self.replay_playing = False
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            self.replay_step = min(self.replay.total, self.replay_step + 1)
+            self.replay_playing = False
+        elif key == pygame.K_SPACE:
+            if self.replay_step >= self.replay.total:
+                self.replay_step = 0
+            self.replay_playing = not self.replay_playing
+        return True
 
     def close(self):
         if self.server is not None:
@@ -255,6 +310,16 @@ class BattleshipRun(GameRun):
     # --------------------------------------------------------------- update
     def update(self, dt, inp):
         self.time += dt
+        if self.replay is not None:                 # rewatching a finished match
+            if self.replay_playing:
+                self._replay_timer += dt
+                if self._replay_timer >= 0.55:
+                    self._replay_timer = 0.0
+                    if self.replay_step < self.replay.total:
+                        self.replay_step += 1
+                    else:
+                        self.replay_playing = False
+            return
         self._ensure_server()
         self.anim.update(dt)
         if not self.anim.busy:
@@ -274,6 +339,12 @@ class BattleshipRun(GameRun):
 
         self.anim.add(Anim("missile", 0.62, data=res, ease=ease_out, on_done=done))
         self.emit("bs_shot", **res)
+        if res.get("win"):
+            self._last_replay = self._rec.build(self.model.winner)
+            try:
+                _save_replay(self._last_replay)
+            except OSError:
+                pass
 
     def on_event(self, etype, data, renderer, audio, banner):
         if etype != "bs_shot":
@@ -296,6 +367,8 @@ class BattleshipRun(GameRun):
 
     def draw_hud(self, o, width, height, section):
         o.text("BATTLESHIP", width / 2, 24, size=30, color=COBALT, center=True)
+        if self.replay is not None:
+            return self._draw_replay(o, width, height)
         if self.host_error:
             return self._draw_host_error(o, width, height)
         if self.model.phase == "place":
@@ -374,8 +447,8 @@ class BattleshipRun(GameRun):
                    width / 2, top + gw + 40, size=20, color=EMBER, center=True)
         self._draw_missile(o, left_x, right_x, top, cell)
 
-    def _draw_grid(self, o, ox, oy, cell, seat):
-        board = self._public["boards"][seat]
+    def _draw_grid(self, o, ox, oy, cell, seat, board=None, reveal=None):
+        board = board if board is not None else self._public["boards"][seat]
         marks = {}
         for s in board["shots"]:
             marks[(s["x"], s["y"])] = "hit" if s["hit"] else "miss"
@@ -388,11 +461,56 @@ class BattleshipRun(GameRun):
             for x in range(n):
                 rx, ry = ox + x * cell, oy + y * cell
                 k = marks.get((x, y))
-                col = {"miss": _MISS, "hit": _HIT, "sunk": _SUNK}.get(k, _SEA)
+                if k:
+                    col = {"miss": _MISS, "hit": _HIT, "sunk": _SUNK}[k]
+                elif reveal and (x, y) in reveal:
+                    col = _SHIP                       # revealed ship (replay only)
+                else:
+                    col = _SEA
                 o.rect(rx + 1, ry + 1, cell - 2, cell - 2, col)
         afloat = board["afloat"]
         o.text(f"{afloat} ship{'s' if afloat != 1 else ''} afloat", ox,
                oy + n * cell + 8, size=14, color=DIM if afloat else DANGER)
+
+    # -- per-perspective replay (rewatch a finished match)
+    def _draw_replay(self, o, width, height):
+        view = self.replay.view(self.replay_step, self.perspective)
+        cell = 34
+        gw = cell * self.model.size
+        gap = 90
+        top = 150
+        left_x = width / 2 - gw - gap / 2
+        right_x = width / 2 + gap / 2
+        reveal = self._reveal_sets(view)
+        self._draw_grid(o, left_x, top, cell, "P1",
+                        board=view["boards"]["P1"], reveal=reveal.get("P1"))
+        self._draw_grid(o, right_x, top, cell, "P2",
+                        board=view["boards"]["P2"], reveal=reveal.get("P2"))
+        plabel = {"P1": f"{self._name('P1')}'s view",
+                  "P2": f"{self._name('P2')}'s view",
+                  "director": "DIRECTOR — both fleets revealed"}[self.perspective]
+        o.text(f"REPLAY · {plabel}", width / 2, top + gw + 40, size=20,
+               color=GOLD, center=True)
+        state = "▶ playing" if self.replay_playing else "❙❙ paused"
+        o.text(f"move {self.replay_step}/{self.replay.total}    {state}",
+               width / 2, top + gw + 70, size=15, color=DIM, center=True)
+        o.text("1/2/3: P1 · P2 · Director     ←/→: step     "
+               "Space: play/pause     R: exit replay",
+               width / 2, height - 44, size=13, color=DIM, center=True)
+
+    def _reveal_sets(self, view):
+        """Which ship cells to reveal per grid for the current perspective:
+        your own fleet for P1/P2, both fleets for the director."""
+        out = {}
+        if view.get("perspective") == "director":
+            for p in ("P1", "P2"):
+                out[p] = {tuple(c) for s in view["fleets"][p] for c in s["cells"]}
+        else:
+            you = view.get("you")
+            if you:
+                out[you] = {tuple(c) for s in view.get("your_fleet", [])
+                            for c in s["cells"]}
+        return out
 
     def _draw_missile(self, o, left_x, right_x, top, cell):
         cur = self.anim.current
