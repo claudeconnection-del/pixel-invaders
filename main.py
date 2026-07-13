@@ -19,6 +19,7 @@ import time
 import pygame
 
 from ambient import preset as ambient_preset
+from ambient import scenes as ambient_scenes
 from ambient.mode import AmbientMode
 from game import events as ev
 from game import theme
@@ -69,6 +70,15 @@ REPLAY_SPEEDS = [0.5, 1.0, 2.0, 4.0]
 # built-in ambient preset ids selectable from Settings (premium/custom are
 # reached in-ambient); kept here so SETTINGS_ROWS has a static choice list
 AMBIENT_FREE_IDS = [p.id for p in ambient_preset.DEFAULTS if p.premium is None]
+
+# in-ambient customization panel (manual mode only)
+AMBIENT_EDIT_ROWS = ["Scene", "Palette", "Speed", "Density", "Sound", "Dim"]
+_AMBIENT_SCENE_IDS = list(ambient_scenes.SCENES)
+_AMBIENT_PALETTES = [(p.name, [list(c) for c in p.palette])
+                     for p in ambient_preset.DEFAULTS]
+_AMBIENT_DENSITIES = ["low", "medium", "high"]
+_AMBIENT_SOUNDS = ["silence", "music:menu", "music:game"]  # beds added in I5
+_AMBIENT_MAX_CUSTOM = 6
 
 # Emberlight cabinet palette (see game/theme.py). Screens use semantic tokens
 # (imported up top) so every menu reads as one system.
@@ -217,6 +227,9 @@ class App:
         self.ambient = AmbientMode(self._current_ambient_preset())
         self.entered_auto = False   # drives the faint "press any key" hint
         self.ambient_session = 0.0  # continuous seconds this ambient visit
+        self.ambient_edit = False   # manual-only customization panel open?
+        self.ambient_edit_row = 0
+        self.ambient_saved_msg = ""
 
         # multiplayer session state
         self.mp = None            # {code, seed, game, mode, players, name}
@@ -332,7 +345,12 @@ class App:
             return
 
         if self.state == AMBIENT:
-            self.stop_ambient()
+            if self.ambient_edit:
+                self._ambient_edit_key(key)          # panel is modal
+            elif (not self.entered_auto) and key == pygame.K_TAB:
+                self._open_ambient_edit()            # manual: opt into chrome
+            else:
+                self.stop_ambient()                  # any other key wakes/exits
             return
 
         if self.state == INITIALS:
@@ -1059,6 +1077,8 @@ class App:
         self.ambient.set_preset(self._current_ambient_preset())
         self.ambient.t = 0.0
         self.ambient_session = 0.0
+        self.ambient_edit = False
+        self.ambient_saved_msg = ""
         self.wave_banner = None
         self.state = AMBIENT
         amb = profile_mod.ambient_section(self.profile)
@@ -1085,6 +1105,90 @@ class App:
         amb = profile_mod.ambient_section(self.profile)
         amb["counters"]["total_seconds"] += dt
         # I6 evaluates the mood achievements against these counters here.
+
+    # ---- in-ambient customization (manual only) --------------------------
+    def _open_ambient_edit(self):
+        """Open the edit panel. Work on a *copy* of the live preset so tweaks
+        never mutate a shared built-in DEFAULTS object."""
+        self.ambient.set_preset(ambient_preset.AmbientPreset.from_dict(
+            self.ambient.preset.to_dict()))
+        self.ambient_edit = True
+        self.ambient_edit_row = 0
+        self.ambient_saved_msg = ""
+        self.audio.play("menu_select")
+
+    def _ambient_edit_key(self, key):
+        rows = AMBIENT_EDIT_ROWS
+        if key in (pygame.K_TAB, pygame.K_ESCAPE):
+            self.ambient_edit = False            # close panel, stay in ambient
+            self.audio.play("menu_move")
+        elif key in (pygame.K_UP, pygame.K_w):
+            self.ambient_edit_row = (self.ambient_edit_row - 1) % len(rows)
+            self.audio.play("menu_move")
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.ambient_edit_row = (self.ambient_edit_row + 1) % len(rows)
+            self.audio.play("menu_move")
+        elif key in (pygame.K_LEFT, pygame.K_a):
+            self._ambient_edit_adjust(-1)
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            self._ambient_edit_adjust(1)
+        elif key == pygame.K_RETURN:
+            self._ambient_save()
+
+    def _ambient_edit_adjust(self, direction):
+        """Cycle/step the selected field on the live (copied) preset — changes
+        apply immediately since the engine holds that same object."""
+        p = self.ambient.preset
+        row = AMBIENT_EDIT_ROWS[self.ambient_edit_row]
+        if row == "Scene":
+            i = _AMBIENT_SCENE_IDS.index(p.scene) if p.scene in _AMBIENT_SCENE_IDS else 0
+            p.scene = _AMBIENT_SCENE_IDS[(i + direction) % len(_AMBIENT_SCENE_IDS)]
+        elif row == "Palette":
+            names = [n for n, _ in _AMBIENT_PALETTES]
+            cur = self._palette_name(p.palette)
+            i = names.index(cur) if cur in names else 0
+            p.palette = [list(c) for c in
+                         _AMBIENT_PALETTES[(i + direction) % len(names)][1]]
+        elif row == "Speed":
+            p.speed = round(min(2.0, max(0.2, p.speed + direction * 0.2)), 1)
+        elif row == "Density":
+            i = _AMBIENT_DENSITIES.index(p.density) if p.density in _AMBIENT_DENSITIES else 1
+            p.density = _AMBIENT_DENSITIES[(i + direction) % len(_AMBIENT_DENSITIES)]
+        elif row == "Sound":
+            i = _AMBIENT_SOUNDS.index(p.sound) if p.sound in _AMBIENT_SOUNDS else 0
+            p.sound = _AMBIENT_SOUNDS[(i + direction) % len(_AMBIENT_SOUNDS)]
+            if self.profile["settings"].get("ambient_sound", "preset") != "silence":
+                self.ambient.start_sound(self.audio)  # preview the new sound
+        elif row == "Dim":
+            p.dim = round(min(0.6, max(0.0, p.dim + direction * 0.05)), 2)
+        self.audio.play("menu_move")
+
+    def _palette_name(self, palette):
+        for name, pal in _AMBIENT_PALETTES:
+            if [list(c) for c in pal] == [list(c) for c in palette]:
+                return name
+        return "custom"
+
+    def _ambient_save(self):
+        """Save the live preset as a new custom slot (capped), make it current."""
+        amb = profile_mod.ambient_section(self.profile)
+        customs = amb["custom"]
+        existing = {c.get("id") for c in customs}
+        i = 1
+        while f"custom_{i}" in existing:
+            i += 1
+        cid = f"custom_{i}"
+        data = self.ambient.preset.to_dict()
+        data["id"], data["name"], data["premium"] = cid, f"Custom {i}", None
+        customs.append(data)
+        while len(customs) > _AMBIENT_MAX_CUSTOM:
+            customs.pop(0)
+        amb["current"] = cid
+        self.ambient.preset.id = cid
+        self.ambient.preset.name = data["name"]
+        self.save_profile()
+        self.ambient_saved_msg = f"Saved {data['name']}"
+        self.audio.play("toast")
 
     def abandon_run(self):
         """Quit to menu mid-run: counts stats so far as an unfinished run."""
@@ -1778,6 +1882,36 @@ class App:
             o.text(self.export_status, self.W / 2, self.H - 30, size=14,
                    color=theme.GOOD, center=True)
 
+    def draw_ambient_edit(self, o):
+        """The manual-mode customization panel — the only chrome allowed in
+        manual ambient, and dismissible back to clean."""
+        p = self.ambient.preset
+        vals = {
+            "Scene": p.scene,
+            "Palette": self._palette_name(p.palette),
+            "Speed": f"{p.speed:.1f}x",
+            "Density": p.density,
+            "Sound": p.sound,
+            "Dim": f"{int(p.dim * 100)}%",
+        }
+        x, y0 = 80, 210
+        pw, ph = 500, 70 + len(AMBIENT_EDIT_ROWS) * 40 + 78
+        o.rect(x - 26, y0 - 44, pw, ph, PANEL)
+        o.rect(x - 26, y0 - 44, 4, ph, GOLD)
+        o.text("CUSTOMIZE AMBIENT", x, y0 - 26, size=20, color=EMBER)
+        for i, row in enumerate(AMBIENT_EDIT_ROWS):
+            yy = y0 + 20 + i * 40
+            sel = i == self.ambient_edit_row
+            o.text(("> " if sel else "  ") + row, x, yy, size=18,
+                   color=TEXT if sel else DIM)
+            o.text(f"< {vals[row]} >" if sel else vals[row], x + 210, yy,
+                   size=18, color=GOLD if sel else DIM)
+        hy = y0 + 20 + len(AMBIENT_EDIT_ROWS) * 40 + 10
+        o.text("Up/Down: pick   Left/Right: change   Enter: save slot   Tab: close",
+               x, hy, size=13, color=DIM)
+        if self.ambient_saved_msg:
+            o.text(self.ambient_saved_msg, x, hy + 24, size=15, color=theme.GOOD)
+
     def draw_attract_overlay(self):
         o = self.renderer.overlay
         module = self.games[self.attract_gid]
@@ -1905,6 +2039,8 @@ class App:
         elif self.state == AMBIENT:
             self.ambient.draw_overlay(self.renderer.overlay, self.W, self.H,
                                       self.entered_auto)
+            if self.ambient_edit:
+                self.draw_ambient_edit(self.renderer.overlay)
         elif self.state == ATTRACT:
             self.draw_attract_overlay()
         if self.profile["settings"].get("show_fps"):

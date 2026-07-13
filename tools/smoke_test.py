@@ -306,6 +306,20 @@ def main():
         render_frame()               # exercises ambient 3D + overlay draw
     assert amb["counters"]["manual_entries"] == manual_before + 1
     assert app.ambient_session > 0 and amb["counters"]["total_seconds"] > 0
+
+    # customization panel (manual only): open, tweak, save a custom slot, close
+    app.handle_keydown(pygame.K_TAB)
+    assert app.ambient_edit
+    app.handle_keydown(pygame.K_DOWN)     # select a field
+    app.handle_keydown(pygame.K_RIGHT)    # change its value (applies live)
+    render_frame()                        # draws the panel
+    custom_before = len(amb["custom"])
+    app.handle_keydown(pygame.K_RETURN)   # save as custom slot
+    assert len(amb["custom"]) == custom_before + 1
+    assert amb["current"] == amb["custom"][-1]["id"]
+    app.handle_keydown(pygame.K_TAB)      # close panel, stay in ambient
+    assert not app.ambient_edit and app.state == game_main.AMBIENT
+
     app.handle_keydown(pygame.K_SPACE)   # any key returns to the menu
     assert app.state == game_main.MENU
 
