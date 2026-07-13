@@ -18,6 +18,8 @@ import time
 
 import pygame
 
+from ambient import preset as ambient_preset
+from ambient.mode import AmbientMode
 from game import events as ev
 from game import theme
 from game.assets import AudioBank, MUSIC_END_EVENT
@@ -59,9 +61,14 @@ MP_CODE = "mp_code"
 LOBBY = "lobby"
 REPLAYS = "replays"        # browse saved replays
 REPLAYING = "replaying"    # watch one back in-engine (with real audio)
+AMBIENT = "ambient"        # calm generative screen (idle or manual)
 
 # replay playback speeds cycled with Up/Down in the theater
 REPLAY_SPEEDS = [0.5, 1.0, 2.0, 4.0]
+
+# built-in ambient preset ids selectable from Settings (premium/custom are
+# reached in-ambient); kept here so SETTINGS_ROWS has a static choice list
+AMBIENT_FREE_IDS = [p.id for p in ambient_preset.DEFAULTS if p.premium is None]
 
 # Emberlight cabinet palette (see game/theme.py). Screens use semantic tokens
 # (imported up top) so every menu reads as one system.
@@ -70,7 +77,7 @@ DANGER = theme.DANGER   # loss / locked / offline
 INFO = theme.INFO       # neutral informational accent
 
 MENU_ITEMS = ["PLAY", "MULTIPLAYER", "HANGAR", "SCORES", "REPLAYS",
-              "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
+              "AMBIENT", "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
 
 # (label, settings key, choices) — Left/Right cycles; floats step by 0.1
 SETTINGS_ROWS = [
@@ -83,6 +90,9 @@ SETTINGS_ROWS = [
     ("Look sensitivity", "mouse_sens", [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5]),
     ("Ghost rival", "ghost", ["off", "personal"]),
     ("Game music", "game_music", ["classic", "custom"]),
+    ("Idle screen", "idle_screen", ["attract", "ambient", "off"]),
+    ("Ambient mode", "ambient_mode", AMBIENT_FREE_IDS),
+    ("Ambient sound", "ambient_sound", ["preset", "silence"]),
     ("Music volume", "music_vol", "float"),
     ("SFX volume", "sfx_vol", "float"),
     ("Show FPS", "show_fps", [False, True]),
@@ -203,6 +213,11 @@ class App:
         self.replays_index = 0
         self.replay_view = None     # active in-engine playback, or None
 
+        # ambient mode: a calm generative screen (idle-fade or manual)
+        self.ambient = AmbientMode(self._current_ambient_preset())
+        self.entered_auto = False   # drives the faint "press any key" hint
+        self.ambient_session = 0.0  # continuous seconds this ambient visit
+
         # multiplayer session state
         self.mp = None            # {code, seed, game, mode, players, name}
         self.mp_menu_index = 0    # 0 host / 1 join
@@ -300,6 +315,11 @@ class App:
             if self.audio.current_pool == "game":  # re-resolve immediately
                 self.audio.music(None)
                 self.audio.music("game")
+        elif key == "ambient_mode":
+            # picking a built-in default preset also updates the remembered
+            # 'current' and the live engine
+            profile_mod.ambient_section(self.profile)["current"] = s["ambient_mode"]
+            self.ambient.set_preset(self._current_ambient_preset())
         self.save_profile()
 
     # --------------------------------------------------------------- input
@@ -309,6 +329,10 @@ class App:
 
         if self.state == ATTRACT:
             self.stop_attract()
+            return
+
+        if self.state == AMBIENT:
+            self.stop_ambient()
             return
 
         if self.state == INITIALS:
@@ -486,6 +510,8 @@ class App:
                     self.menu_index = 2  # jump to PLAY
                 else:
                     self.menu_choose(row)
+            elif key == pygame.K_F2:      # manual ambient (chrome-free)
+                self.start_ambient(auto=False)
             elif key == pygame.K_ESCAPE:
                 self.quit()
 
@@ -651,6 +677,8 @@ class App:
         elif choice == "REPLAYS":
             if self.game.INFO.has_scores:
                 self.open_replays()
+        elif choice == "AMBIENT":
+            self.start_ambient(auto=False)
         elif choice == "ACHIEVEMENTS":
             self.state = ACHIEVEMENTS_SCREEN
         elif choice == "STATS":
@@ -999,6 +1027,65 @@ class App:
         if run.run_over:
             self.start_attract()
 
+    # -------------------------------------------------------------- ambient
+    def _unlocked_achievements(self):
+        """Every earned achievement id across all games (for premium gating)."""
+        out = set()
+        for section in self.profile.get("games", {}).values():
+            out.update(section.get("achievements", {}).keys())
+        return out
+
+    def _ambient_presets(self):
+        """Selectable presets: unlock-gated built-ins + saved custom slots."""
+        amb = profile_mod.ambient_section(self.profile)
+        return (ambient_preset.available_presets(self._unlocked_achievements())
+                + ambient_preset.custom_presets(amb))
+
+    def _current_ambient_preset(self):
+        """The active ambient preset: profile['ambient']['current'] if it still
+        resolves, else the first available built-in."""
+        amb = profile_mod.ambient_section(self.profile)
+        want = amb.get("current") or self.profile["settings"].get("ambient_mode")
+        presets = self._ambient_presets()
+        for p in presets:
+            if p.id == want:
+                return p
+        return presets[0] if presets else ambient_preset.DEFAULTS[0]
+
+    def start_ambient(self, auto):
+        """Enter the calm screen. `auto` (idle fade) shows a faint return hint;
+        manual entry is chrome-free. Bumps the matching entry counter."""
+        self.entered_auto = auto
+        self.ambient.set_preset(self._current_ambient_preset())
+        self.ambient.t = 0.0
+        self.ambient_session = 0.0
+        self.wave_banner = None
+        self.state = AMBIENT
+        amb = profile_mod.ambient_section(self.profile)
+        amb["counters"]["idle_entries" if auto else "manual_entries"] += 1
+        self.save_profile()
+        if self.profile["settings"].get("ambient_sound", "preset") == "silence":
+            self.audio.music(None)
+        else:
+            self.ambient.start_sound(self.audio)
+        if not auto:
+            self.audio.play("menu_select")
+
+    def stop_ambient(self):
+        """Any input leaves ambient back to the menu, restoring menu music."""
+        self.idle_timer = 0.0
+        self.state = MENU
+        self.audio.music("menu")
+        self.audio.play("menu_select")
+        self.save_profile()
+
+    def update_ambient(self, dt):
+        self.ambient.update(dt)
+        self.ambient_session += dt
+        amb = profile_mod.ambient_section(self.profile)
+        amb["counters"]["total_seconds"] += dt
+        # I6 evaluates the mood achievements against these counters here.
+
     def abandon_run(self):
         """Quit to menu mid-run: counts stats so far as an unfinished run."""
         if self.run is not None and not self.run.run_over:
@@ -1053,6 +1140,9 @@ class App:
         self.idle_timer = 0.0
         if self.state == ATTRACT:
             self.stop_attract()
+            return
+        if self.state == AMBIENT:
+            self.stop_ambient()
             return
         in_game = self.state in (PLAYING, PAUSED)
         if button == 0:      # A: confirm (fire is polled separately in-game)
@@ -1730,6 +1820,8 @@ class App:
         elif self.state == REPLAYING and self.replay_view is not None:
             rv = self.replay_view
             rv["run"].draw(self.renderer, rv["section"])
+        elif self.state == AMBIENT:
+            self.ambient.draw(self.renderer)
         elif self.state == MENU:
             aspect = self.renderer.width / self.renderer.height
             if aspect >= 1.25:  # narrow/square screens: menu panel only
@@ -1810,6 +1902,9 @@ class App:
             self.draw_replays()
         elif self.state == REPLAYING:
             self.draw_replay_overlay()
+        elif self.state == AMBIENT:
+            self.ambient.draw_overlay(self.renderer.overlay, self.W, self.H,
+                                      self.entered_auto)
         elif self.state == ATTRACT:
             self.draw_attract_overlay()
         if self.profile["settings"].get("show_fps"):
@@ -1860,10 +1955,19 @@ class App:
                 self.update_replay(dt)
             elif self.state == ATTRACT:
                 self.update_attract(dt)
+            elif self.state == AMBIENT:
+                self.update_ambient(dt)
             elif self.state == MENU:
                 self.idle_timer += dt
                 if self.idle_timer >= ATTRACT_IDLE_SECONDS:
-                    self.start_attract()
+                    # idle behaviour is a setting: attract / ambient / off
+                    target = ambient_preset.idle_target(
+                        self.profile["settings"].get("idle_screen", "attract"))
+                    if target == "attract":
+                        self.start_attract()
+                    elif target == "ambient":
+                        self.start_ambient(auto=True)
+                    # "off": stay on the menu (nothing to do)
 
             # cursor + mouse grab: FPS games hide the pointer while playing;
             # mouse-look games (Doom) also grab so relative motion keeps
@@ -1873,7 +1977,8 @@ class App:
             # a live run grabs the mouse — a replay is a scripted spectator view
             watching_fps = self.state in (PLAYING, REPLAYING) and (
                 info.mouse_aim or info.mouse_look)
-            pygame.mouse.set_visible(not watching_fps)
+            pygame.mouse.set_visible(
+                not (watching_fps or self.state == AMBIENT))
             pygame.event.set_grab(self.state == PLAYING and info.mouse_look)
 
             self.renderer.begin(dt if self.state != PAUSED else 0.0)

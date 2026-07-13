@@ -293,6 +293,37 @@ def main():
     assert app.state == game_main.MENU
     print("attract mode OK")
 
+    # ambient mode: manual entry (F2), draw the scene + overlay, any-key exit;
+    # then the idle-screen routing that fades a quiet menu into ambient
+    app.game_id = "voxelhell"
+    app.state = game_main.MENU
+    amb = profile_mod.ambient_section(app.profile)
+    manual_before = amb["counters"]["manual_entries"]
+    app.handle_keydown(pygame.K_F2)
+    assert app.state == game_main.AMBIENT and not app.entered_auto
+    for _ in range(30):
+        app.update_ambient(dt)
+        render_frame()               # exercises ambient 3D + overlay draw
+    assert amb["counters"]["manual_entries"] == manual_before + 1
+    assert app.ambient_session > 0 and amb["counters"]["total_seconds"] > 0
+    app.handle_keydown(pygame.K_SPACE)   # any key returns to the menu
+    assert app.state == game_main.MENU
+
+    from ambient.preset import idle_target
+    assert idle_target("attract") == "attract"
+    assert idle_target("ambient") == "ambient"
+    assert idle_target("off") is None
+    app.profile["settings"]["idle_screen"] = "ambient"
+    idle_before = amb["counters"]["idle_entries"]
+    app.start_ambient(auto=True)          # what the MENU idle hook now does
+    assert app.state == game_main.AMBIENT and app.entered_auto
+    render_frame()                        # auto path draws the faint hint
+    assert amb["counters"]["idle_entries"] == idle_before + 1
+    app.handle_keydown(pygame.K_RETURN)
+    assert app.state == game_main.MENU
+    print(f"ambient mode OK (manual + idle entries, "
+          f"{amb['counters']['total_seconds']:.1f}s logged)")
+
     pygame.quit()
     print("SMOKE TEST PASSED")
 

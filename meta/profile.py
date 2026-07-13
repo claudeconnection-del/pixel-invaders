@@ -50,10 +50,26 @@ DEFAULT_PROFILE = {
         "mouse_sens": 1.0,        # look sensitivity multiplier (FPS games)
         "ghost": "personal",      # off | personal (race your best run's ghost)
         "game_music": "classic",  # classic | custom (Voxel Studio export)
+        "idle_screen": "attract",  # attract | ambient | off (menu idle behaviour)
+        "ambient_mode": "embers",  # default ambient preset id (built-in)
+        "ambient_sound": "preset",  # preset | silence (global ambient sound override)
         "player_name": "AAA",  # arcade initials
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8083
     },
+    # ambient mode: last-used preset, custom save slots, and mood counters
+    "ambient": {
+        "current": "embers",
+        "custom": [],          # AmbientPreset dicts (capped by the UI)
+        "counters": {
+            "total_seconds": 0.0,   # lifetime seconds spent in ambient
+            "idle_entries": 0,      # lifetime auto (idle) entries
+            "manual_entries": 0,    # lifetime manual entries
+            "last_run_end_ts": 0.0,  # epoch of the last run end (take_a_break)
+        },
+    },
 }
+
+AMBIENT_DEFAULT = DEFAULT_PROFILE["ambient"]
 
 
 def default_path():
@@ -72,6 +88,19 @@ def game_section(profile, game_id):
     for key, value in GAME_SECTION_DEFAULT.items():
         section.setdefault(key, copy.deepcopy(value))
     return section
+
+
+def ambient_section(profile):
+    """Fetch (creating/backfilling) the ambient sub-dict: last-used preset,
+    custom save slots, and the mood-achievement counters. Tolerant of old
+    saves that predate any of these keys."""
+    amb = profile.setdefault("ambient", copy.deepcopy(AMBIENT_DEFAULT))
+    amb.setdefault("current", AMBIENT_DEFAULT["current"])
+    amb.setdefault("custom", [])
+    counters = amb.setdefault("counters", {})
+    for key, value in AMBIENT_DEFAULT["counters"].items():
+        counters.setdefault(key, value)
+    return amb
 
 
 def _migrate_v1(saved, profile):
@@ -106,7 +135,8 @@ def load(path=None):
         return profile
 
     for key, value in saved.items():
-        if key in ("settings", "leaderboard", "games") and isinstance(value, dict):
+        if key in ("settings", "leaderboard", "games", "ambient") \
+                and isinstance(value, dict):
             profile[key].update(value)
         elif key in profile:
             profile[key] = value
