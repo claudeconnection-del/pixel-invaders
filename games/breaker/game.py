@@ -54,6 +54,9 @@ class BreakerRun(GameRun):
     def run_summary(self):
         return self.world.run_summary(self.world.won)
 
+    def ghost_sample(self):
+        return (self.world.paddle_x, self.world.paddle_y)
+
     # ---------------------------------------------------------- effects
     def on_event(self, etype, data, renderer, audio, banner):
         if etype == ev.ENEMY_KILLED:
@@ -121,6 +124,11 @@ class BreakerRun(GameRun):
             spin = quat_axis_angle(0, 1, 0, t * 2.4)
             b.add(POWERUP_SPRITES[pu.kind], pu.x, pu.y, 0.2, quat=spin,
                   tint=(1.5, 1.5, 1.5, 1.0))
+
+        gs = getattr(self, "ghost_state", None)
+        if gs is not None and gs[0] is not None:
+            (gx, gy), ga = gs
+            b.add("paddle", gx, gy, 110 / 10 / 32, tint=(0.55, 0.68, 0.95, ga))
 
         renderer.stud_color = _T.scene_studs()  # lagoon arena edge
         renderer.draw_scene(b)

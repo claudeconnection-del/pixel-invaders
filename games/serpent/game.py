@@ -49,6 +49,9 @@ class SerpentRun(GameRun):
     def run_summary(self):
         return self.world.run_summary(False)
 
+    def ghost_sample(self):
+        return field_pos(self.world.body[0])  # head, field coords
+
     # ---------------------------------------------------------- effects
     def on_event(self, etype, data, renderer, audio, banner):
         if etype == ev.FRUIT_EATEN:
@@ -103,6 +106,11 @@ class SerpentRun(GameRun):
             else:
                 b.add("bullet_orb", fx, fy, 0.17, quat=spin,
                       tint=(1.7, 0.6, 0.5, 1.0))
+
+        gs = getattr(self, "ghost_state", None)
+        if gs is not None and gs[0] is not None:
+            (gx, gy), ga = gs
+            b.add("cube", gx, gy, CELL / 32 * 0.5, tint=(0.55, 0.68, 0.95, ga))
 
         renderer.stud_color = _T.scene_studs()  # pine arena edge
         renderer.draw_scene(b)

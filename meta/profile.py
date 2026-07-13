@@ -48,6 +48,7 @@ DEFAULT_PROFILE = {
         "sfx_vol": 1.0,
         "show_fps": False,
         "mouse_sens": 1.0,        # look sensitivity multiplier (FPS games)
+        "ghost": "personal",      # off | personal (race your best run's ghost)
         "game_music": "classic",  # classic | custom (Voxel Studio export)
         "player_name": "AAA",  # arcade initials
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8083

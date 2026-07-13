@@ -90,6 +90,11 @@ class VoxelHellRun(GameRun):
     def run_summary(self):
         return self.world.run_summary(self.world.won)
 
+    def ghost_sample(self):
+        """Ship position for ghost recording/replay (field coords)."""
+        p = self.world.player
+        return (p.x, p.y)
+
     # ---------------------------------------------------------- effects
     def on_event(self, etype, data, renderer, audio, banner):
         self.graze_sfx_gate = max(0.0, self.graze_sfx_gate - 1 / 60)
@@ -214,6 +219,14 @@ class VoxelHellRun(GameRun):
                 b.add_cube_late(p.x, p.y, 0.11,
                                 quat=quat_axis_angle(0, 0, 1, t * 3),
                                 tint=(2.6, 2.4, 2.6, 1.0), z=0.6)
+
+        # rival ghost: a translucent cool-lit ship tracing your best run
+        gs = getattr(self, "ghost_state", None)
+        if gs is not None and gs[0] is not None:
+            (gx, gy), ga = gs
+            drift = quat_axis_angle(0, 1, 0, math.sin(t * 3.1) * 0.12)
+            b.add("ship_vanguard", gx, gy, SCALES["ship"], quat=drift,
+                  tint=(0.55, 0.68, 0.95, ga))
 
         renderer.stud_color = _T.scene_studs()  # iris arena edge
         renderer.draw_scene(b)

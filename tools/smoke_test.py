@@ -14,8 +14,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # isolate the profile so smoke tests never touch the real save
 import meta.profile as profile_mod  # noqa: E402
+import meta.ghost as ghost_mod  # noqa: E402
 _tmp = tempfile.mkdtemp()
 profile_mod.default_path = lambda: os.path.join(_tmp, "profile.json")
+ghost_mod.default_path = lambda: os.path.join(_tmp, "ghosts.json")
 
 import pygame  # noqa: E402
 

@@ -22,6 +22,7 @@ from game.entities import InputState
 from game.netclient import ArcadeClient
 from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
                    load_games)
+from meta import ghost as ghost_mod
 from meta import leaderboard as lb
 from meta import profile as profile_mod
 from meta.achievements import AchievementEngine
@@ -67,6 +68,7 @@ SETTINGS_ROWS = [
     ("Particles", "particles", ["low", "medium", "high"]),
     ("CRT filter", "crt", [True, False]),
     ("Look sensitivity", "mouse_sens", [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5]),
+    ("Ghost rival", "ghost", ["off", "personal"]),
     ("Game music", "game_music", ["classic", "custom"]),
     ("Music volume", "music_vol", "float"),
     ("SFX volume", "sfx_vol", "float"),
@@ -165,6 +167,12 @@ class App:
                                   self.audio.play("toast")),
             save_cb=self.save_profile)
         self.outbox_timer = 5.0  # first drain shortly after boot
+
+        # ghost racing: per game+mode personal-best trajectory
+        self.ghosts = ghost_mod.load()
+        self.ghost_rec = None       # recorder for the current run
+        self.ghost_play = None      # replayer of a rival ghost, or None
+        self.run_elapsed = 0.0      # play time for ghost timing
 
         # multiplayer session state
         self.mp = None            # {code, seed, game, mode, players, name}
@@ -577,10 +585,27 @@ class App:
         self.toasts.clear()
         self.wave_banner = None
         self.state = PLAYING
+        self._setup_ghosts(mode)
         if self.game.INFO.mouse_look:
             pygame.mouse.get_rel()  # flush menu motion so the camera doesn't snap
         # tool modules (studio) manage their own audio; games get their pool
         self.audio.music(self.gameplay_music_pool())
+
+    def _setup_ghosts(self, mode):
+        """Arm the ghost recorder, and the personal-best replayer if enabled.
+        Ghosts are a solo feature; sessions race live opponents instead."""
+        self.run_elapsed = 0.0
+        self.ghost_rec = None
+        self.ghost_play = None
+        if not hasattr(self.run, "ghost_sample") or self.mp is not None:
+            return
+        self.ghost_rec = ghost_mod.GhostRecorder()
+        if self.profile["settings"].get("ghost", "personal") != "off":
+            g = ghost_mod.get_ghost(self.ghosts, self.game_id, mode)
+            if g is not None:
+                player = ghost_mod.GhostPlayer(g)
+                if player.valid:
+                    self.ghost_play = player
 
     def gameplay_music_pool(self):
         """The section pool for the running game ('game', 'metal', ... or
@@ -827,6 +852,14 @@ class App:
     def update_playing(self, dt):
         run = self.run
         run.update(dt, self.gameplay_input())
+        self.run_elapsed += dt
+        if self.ghost_rec is not None:
+            self.ghost_rec.on_frame(dt, run)
+        # hand the game the rival's interpolated sample so its draw() can
+        # render a translucent ghost in the same 3D pass
+        if self.ghost_play is not None:
+            sample = self.ghost_play.sample_at(self.run_elapsed)
+            run.ghost_state = (sample, 0.5) if sample is not None else None
         frame_events = run.drain_events()
 
         for etype, data in frame_events:
@@ -856,6 +889,10 @@ class App:
             self.state = RUN_END
             self.audio.music(None)
             score = self.run_summary["score"]
+            if self.ghost_rec is not None and self.ghost_rec.samples:
+                ghost = self.ghost_rec.build(self.game_id, self.run_mode, score)
+                if ghost_mod.maybe_store_best(self.ghosts, ghost):
+                    self.post_banner("NEW GHOST SAVED", 2.0)
             if self.mp is not None:
                 # session runs report to the lobby, not the initials flow;
                 # queued so a dropped connection still lands the score
@@ -868,6 +905,23 @@ class App:
                     extra["wave"] = self.run_summary["wave_reached"]
                 self.pending_board = (self.game_id, self.run_mode, score, extra)
             self.save_profile()
+
+    def draw_ghost_pace(self, o):
+        """Rival pace readout: the ghost's score at your current elapsed
+        time and how far ahead/behind you are — a live race against your
+        best run. Bottom-centre so it clears every game's HUD."""
+        if self.ghost_play is None:
+            return
+        gscore = self.ghost_play.score_at(self.run_elapsed)
+        delta = int(self.run.score) - gscore
+        ahead = delta >= 0
+        col = theme.GOOD if ahead else DANGER
+        y = self.H - 98
+        o.rect(self.W / 2 - 150, y - 6, 300, 30, PANEL)
+        o.text(f"GHOST {gscore:07d}", self.W / 2 - 20, y, size=16, color=DIM,
+               center=True)
+        o.text(f"{'+' if ahead else ''}{delta}", self.W / 2 + 96, y, size=16,
+               color=col, center=True)
 
     # ------------------------------------------------------------ overlays
     def draw_banner_and_toasts(self):
@@ -1343,6 +1397,7 @@ class App:
                 hud_w = self.W
             self.run.draw_hud(o, hud_w, self.H, self.section)
             o.offset_x = 0.0
+            self.draw_ghost_pace(o)
             self.draw_banner_and_toasts()
             if self.state == PAUSED:
                 self.draw_paused()

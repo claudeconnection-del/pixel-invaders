@@ -58,6 +58,11 @@ class AimRun(GameRun):
     def run_summary(self):
         return self.world.run_summary(self.world.won)
 
+    def ghost_sample(self):
+        # aim is a pure score race; the pace HUD is the ghost. sample is
+        # recorded but not drawn (no ghost_state read in draw).
+        return self.aim
+
     def on_event(self, etype, data, renderer, audio, banner):
         if etype == ev.SHOT_FIRED:
             audio.play("shoot")
