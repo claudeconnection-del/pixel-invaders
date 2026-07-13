@@ -1004,6 +1004,8 @@ class App:
         if self.run is not None and not self.run.run_over:
             life = self.section["lifetime"]
             life["runs"] += 1
+        if self.run is not None and hasattr(self.run, "close"):
+            self.run.close()   # let a run release resources (e.g. board host server)
         self.run = None
         self.save_profile()
         self.state = LOBBY if self.mp is not None else MENU

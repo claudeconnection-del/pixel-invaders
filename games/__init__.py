@@ -4,6 +4,7 @@ import importlib
 CATEGORIES = [
     ("CLASSICS +", ["voxelhell", "breaker", "serpent", "studio"]),
     ("FPS", ["voxeldoom", "crisis", "aimtrainer"]),
+    ("BOARD", ["battleship"]),
 ]
 
 GAME_IDS = [gid for _, ids in CATEGORIES for gid in ids]

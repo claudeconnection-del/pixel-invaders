@@ -218,6 +218,62 @@ def test_server_loopback():
     print("server loopback OK")
 
 
+# --------------------------------------------------------- cabinet run tests
+def _auto_layout(rng):
+    """A valid fleet layout as the phone would submit it (name/size/x/y/h)."""
+    from games.battleship.model import FLEET, SIZE
+    placed, occ = [], set()
+    for name, size in FLEET:
+        while True:
+            h = rng.random() < 0.5
+            x = rng.randrange(SIZE - size + 1) if h else rng.randrange(SIZE)
+            y = rng.randrange(SIZE) if h else rng.randrange(SIZE - size + 1)
+            cells = [(x + (i if h else 0), y + (0 if h else i)) for i in range(size)]
+            if all(c not in occ for c in cells):
+                occ.update(cells)
+                placed.append({"name": name, "size": size, "x": x, "y": y,
+                               "horizontal": h})
+                break
+    return placed
+
+
+def test_run_wiring():
+    """Drive a whole match through BattleshipRun.update (server skipped), so the
+    run's pump + anim-gating + move flow are exercised end to end, headless."""
+    run = bs.create_run("secret", random.Random(3))
+    run.host_error = "skip-server-in-test"     # don't bind a socket
+    assert run.session is not None and run.model.phase == "place"
+    a = run.session.join(run.session.code, "Ann")
+    b = run.session.join(run.session.code, "Bo")
+    run.session.submit("P1", a["token"], {"kind": "ready", "layout": _auto_layout(random.Random(11))})
+    run.session.submit("P2", b["token"], {"kind": "ready", "layout": _auto_layout(random.Random(22))})
+    run.update(0.1, None); run.update(0.1, None)     # pump both readys
+    assert run.model.phase == "fire", "both ready should begin the fire phase"
+    guard = 0
+    while run.model.winner is None and guard < 6000:
+        if not run.anim.busy:                        # ready for the next move
+            seat = run.model.turn
+            x, y = ai_fire(run.model)
+            tok = a["token"] if seat == "P1" else b["token"]
+            run.session.submit(seat, tok, {"kind": "fire", "x": x, "y": y})
+        run.update(0.1, None)                        # pumps + advances the anim gate
+        guard += 1
+    assert run.model.winner in ("P1", "P2")
+    assert run.run_over is False and run.model.phase == "over"
+    run.close()
+    print(f"run wiring OK (winner={run.model.winner})")
+
+
+def test_registration():
+    """The cabinet registry imports battleship and exposes the game contract."""
+    from games import load_games, GAME_IDS, category_of
+    assert "battleship" in GAME_IDS and category_of("battleship") == "BOARD"
+    mod = load_games()["battleship"]
+    assert mod.INFO.id == "battleship" and mod.INFO.modes[0][0] == "secret"
+    assert callable(mod.create_run) and isinstance(mod.ACHIEVEMENTS, list)
+    print("registration OK")
+
+
 def main():
     test_secrecy_invariant()
     test_join_rules()
@@ -225,6 +281,8 @@ def main():
     test_anim_gate_blocks_pump()
     test_full_game_via_session()
     test_server_loopback()
+    test_run_wiring()
+    test_registration()
     print("ALL COMPANION TESTS PASSED")
 
 

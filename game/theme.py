@@ -105,6 +105,7 @@ GAMES = {
     "crisis":    Theme(COPPER, EMBER, COPPER),    # dusk on-rails
     "aimtrainer": Theme(FROST, COBALT, COBALT),   # cool precision range
     "studio":    Theme(BLOOM, PETAL, BLOOM),      # creative pink
+    "battleship": Theme(COBALT, FROST, COBALT),   # naval night blue
 }
 
 DEFAULT = Theme(EMBER, HONEY, EMBER)
