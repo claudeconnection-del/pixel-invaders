@@ -126,6 +126,60 @@ def test_sessions():
     print("sessions OK (host/join/score/sort/validation)")
 
 
+def test_matches():
+    db.reset_for_tests()
+    # host a match with an opaque board state, MOOSE to move first
+    r = client.post("/api/v1/matches", json={
+        "game": "battleship", "host": "moose",
+        "state": {"phase": "play", "boards": {}}, "turn": "moose"})
+    assert r.status_code == 200, r.text
+    m = r.json()
+    code, v = m["code"], m["version"]
+    assert len(code) == 4 and v == 1 and m["turn"] == "MOOSE"
+
+    # opponent joins
+    r = client.post(f"/api/v1/matches/{code}/join", json={"name": "bun"})
+    assert r.status_code == 200
+    assert {p for p in r.json()["players"]} == {"MOOSE", "BUN"}
+
+    # BUN can't move — not their turn
+    r = client.post(f"/api/v1/matches/{code}/move", json={
+        "name": "bun", "base_version": 1, "state": {"x": 1}, "turn": "BUN"})
+    assert r.status_code == 403
+
+    # MOOSE moves, handing the turn to BUN; version bumps
+    r = client.post(f"/api/v1/matches/{code}/move", json={
+        "name": "moose", "base_version": 1,
+        "state": {"phase": "play", "shot": [3, 4]}, "turn": "BUN"})
+    assert r.status_code == 200 and r.json()["version"] == 2
+    assert r.json()["turn"] == "BUN" and r.json()["state"]["shot"] == [3, 4]
+
+    # MOOSE tries again at the stale version -> not their turn now (403)
+    r = client.post(f"/api/v1/matches/{code}/move", json={
+        "name": "moose", "base_version": 2, "state": {}, "turn": "MOOSE"})
+    assert r.status_code == 403
+
+    # version-conflict: BUN submits an outdated base_version
+    r = client.post(f"/api/v1/matches/{code}/move", json={
+        "name": "bun", "base_version": 1, "state": {}, "turn": "MOOSE"})
+    assert r.status_code == 409
+
+    # poll with since=1 sees the change; since=2 does not
+    r = client.get(f"/api/v1/matches/{code}", params={"since": 1})
+    assert r.status_code == 200 and r.json()["version"] == 2
+    assert r.json()["state"]["shot"] == [3, 4]
+    r = client.get(f"/api/v1/matches/{code}", params={"since": 2})
+    assert r.json()["changed"] is False
+
+    # unknown code + oversized state rejected
+    assert client.get("/api/v1/matches/ZZZZ").status_code == 404
+    big = {"blob": "x" * 70000}
+    r = client.post("/api/v1/matches", json={
+        "game": "battleship", "host": "moose", "state": big})
+    assert r.status_code == 413
+    print("matches OK (create/join/turn-gate/version-conflict/poll/limits)")
+
+
 if __name__ == "__main__":
     test_health()
     test_submit_and_rank()
@@ -133,4 +187,5 @@ if __name__ == "__main__":
     test_api_key()
     test_boards_daily_scoreboard()
     test_sessions()
+    test_matches()
     print("ALL SERVER TESTS PASSED")

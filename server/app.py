@@ -8,9 +8,11 @@ Env:
     ARCADE_CORS_ORIGINS  comma-separated origins for browser reads (default *)
 """
 import hashlib
+import json
 import os
 import re
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -171,6 +173,115 @@ def get_session(code: str):
     if session is None:
         raise HTTPException(status_code=404, detail="no such session")
     return session
+
+
+# ------------------------------------------------- turn-based board matches
+TURN_RE = re.compile(r"^[A-Z0-9 _]{1,16}$")
+MAX_STATE_BYTES = 64 * 1024
+
+
+class MatchCreate(BaseModel):
+    game: str = Field(..., max_length=32)
+    host: str = Field(..., max_length=8)
+    state: Any = None
+    turn: str | None = Field(None, max_length=16)
+
+
+class MatchJoin(BaseModel):
+    name: str = Field(..., max_length=8)
+
+
+class MatchMove(BaseModel):
+    name: str = Field(..., max_length=8)
+    base_version: int = Field(..., ge=1)
+    state: Any = None
+    turn: str | None = Field(None, max_length=16)
+
+
+def _turn(raw):
+    if raw is None:
+        return None
+    t = raw.upper().strip()
+    if not TURN_RE.match(t):
+        raise HTTPException(status_code=422, detail="bad turn token")
+    return t
+
+
+def _check_state(state):
+    try:
+        if len(json.dumps(state)) > MAX_STATE_BYTES:
+            raise HTTPException(status_code=413, detail="state too large")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="state not JSON-serialisable")
+
+
+def _match_code(code):
+    code = code.upper()
+    if not CODE_RE.match(code):
+        raise HTTPException(status_code=422, detail="bad match code")
+    return code
+
+
+@app.post("/api/v1/matches")
+def create_match(body: MatchCreate,
+                 x_api_key: str | None = Header(default=None)):
+    """Host a turn-based board match. The server relays an opaque state blob;
+    the games own the rules. Returns the match with version 1."""
+    _check_key(x_api_key)
+    if not SLUG_RE.match(body.game):
+        raise HTTPException(status_code=422, detail="bad game slug")
+    _check_state(body.state)
+    host = _player_name(body.host)
+    return db.create_match(body.game, host, body.state, _turn(body.turn))
+
+
+@app.post("/api/v1/matches/{code}/join")
+def join_match(code: str, body: MatchJoin,
+               x_api_key: str | None = Header(default=None)):
+    _check_key(x_api_key)
+    code = _match_code(code)
+    name = _player_name(body.name)
+    result = db.join_match(code, name)
+    if result is None:
+        raise HTTPException(status_code=404, detail="no such match")
+    if result == "taken":
+        raise HTTPException(status_code=409, detail="name already joined")
+    if result == "full":
+        raise HTTPException(status_code=409, detail="match is full")
+    return db.get_match(code)
+
+
+@app.post("/api/v1/matches/{code}/move")
+def submit_move(code: str, body: MatchMove,
+                x_api_key: str | None = Header(default=None)):
+    """Turn- and version-gated move. 403 if not your turn, 409 if someone
+    moved first (rebase on the returned version and retry)."""
+    _check_key(x_api_key)
+    code = _match_code(code)
+    _check_state(body.state)
+    name = _player_name(body.name)
+    status, match = db.submit_move(code, name, body.base_version, body.state,
+                                   _turn(body.turn))
+    if status == "notfound":
+        raise HTTPException(status_code=404, detail="no such match")
+    if status == "forbidden":
+        raise HTTPException(status_code=403, detail="not your turn")
+    if status == "conflict":
+        raise HTTPException(status_code=409,
+                            detail={"error": "version_conflict",
+                                    "version": match["version"]})
+    return match
+
+
+@app.get("/api/v1/matches/{code}")
+def get_match(code: str, since: int = Query(-1)):
+    code = _match_code(code)
+    match = db.get_match(code)
+    if match is None:
+        raise HTTPException(status_code=404, detail="no such match")
+    if since >= 0 and match["version"] <= since:
+        return {"code": code, "version": match["version"], "changed": False}
+    return match
 
 
 @app.get("/scoreboard", response_class=HTMLResponse)

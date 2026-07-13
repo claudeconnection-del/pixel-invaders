@@ -77,6 +77,20 @@ def main():
     assert state["players"][0]["score"] == 42
     print(f"session round trip OK (code={code})")
 
+    # turn-based board match round trip
+    match = call("POST", "/api/v1/matches",
+                 {"game": "_ci", "host": "CI", "state": {"n": 0}, "turn": "CI"})
+    mcode = match["code"]
+    call("POST", f"/api/v1/matches/{mcode}/join", {"name": "CI2"})
+    moved = call("POST", f"/api/v1/matches/{mcode}/move",
+                 {"name": "CI", "base_version": 1, "state": {"n": 1},
+                  "turn": "CI2"})
+    assert moved["version"] == 2 and moved["turn"] == "CI2"
+    assert moved["state"]["n"] == 1
+    polled = call("GET", f"/api/v1/matches/{mcode}?since=1")
+    assert polled["version"] == 2
+    print(f"match round trip OK (code={mcode})")
+
     # daily seed stable
     a = call("GET", "/api/v1/daily")
     b = call("GET", "/api/v1/daily")

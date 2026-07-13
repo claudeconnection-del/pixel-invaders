@@ -3,6 +3,7 @@
 WAL mode, single file, safe under uvicorn's default worker. The DB path
 comes from ARCADE_DB_PATH (docker-compose mounts a volume at /data).
 """
+import json
 import os
 import sqlite3
 import threading
@@ -54,6 +55,28 @@ def connection():
                 score INTEGER,
                 wave INTEGER,
                 submitted TEXT,
+                PRIMARY KEY (code, name)
+            )
+        """)
+        # turn-based board matches: game-agnostic relay of an opaque state
+        # blob, gated by whose turn it is and an optimistic version counter.
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS matches (
+                code TEXT PRIMARY KEY,
+                game TEXT NOT NULL,
+                state TEXT NOT NULL,
+                turn TEXT,
+                version INTEGER NOT NULL,
+                host TEXT NOT NULL,
+                created TEXT NOT NULL,
+                updated TEXT NOT NULL
+            )
+        """)
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS match_players (
+                code TEXT NOT NULL,
+                name TEXT NOT NULL,
+                joined TEXT NOT NULL,
                 PRIMARY KEY (code, name)
             )
         """)
@@ -202,11 +225,122 @@ def submit_session_score(code, name, score, wave=None):
     return True
 
 
+# --------------------------------------------------- turn-based board matches
+MATCH_TTL_HOURS = 24
+MATCH_MAX_PLAYERS = 6
+
+
+def _purge_expired_matches(conn):
+    cutoff = datetime.now(timezone.utc).timestamp() - MATCH_TTL_HOURS * 3600
+    cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat(
+        timespec="seconds")
+    old = [r[0] for r in conn.execute(
+        "SELECT code FROM matches WHERE updated < ?", (cutoff_iso,))]
+    for code in old:
+        conn.execute("DELETE FROM matches WHERE code = ?", (code,))
+        conn.execute("DELETE FROM match_players WHERE code = ?", (code,))
+
+
+def _match_row(conn, code):
+    row = conn.execute(
+        "SELECT game, state, turn, version, host, created, updated "
+        "FROM matches WHERE code = ?", (code,)).fetchone()
+    if row is None:
+        return None
+    players = [r[0] for r in conn.execute(
+        "SELECT name FROM match_players WHERE code = ? ORDER BY joined ASC",
+        (code,))]
+    return {
+        "code": code, "game": row[0], "state": json.loads(row[1]),
+        "turn": row[2], "version": row[3], "host": row[4],
+        "created": row[5], "updated": row[6], "players": players,
+    }
+
+
+def create_match(game, host, state, turn):
+    import random as _random
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _lock:
+        conn = connection()
+        _purge_expired_matches(conn)
+        for _ in range(50):
+            code = "".join(_random.choices(_CODE_ALPHABET, k=4))
+            if not conn.execute("SELECT 1 FROM matches WHERE code = ?",
+                                (code,)).fetchone():
+                break
+        else:
+            raise RuntimeError("could not allocate a match code")
+        conn.execute(
+            "INSERT INTO matches (code, game, state, turn, version, host, "
+            "created, updated) VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+            (code, game, json.dumps(state), turn, host, now, now))
+        conn.execute(
+            "INSERT INTO match_players (code, name, joined) VALUES (?, ?, ?)",
+            (code, host, now))
+        conn.commit()
+        return _match_row(conn, code)
+
+
+def get_match(code):
+    with _lock:
+        conn = connection()
+        _purge_expired_matches(conn)
+        return _match_row(conn, code)
+
+
+def join_match(code, name):
+    """Returns 'ok', 'taken', 'full', or None (no such match)."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _lock:
+        conn = connection()
+        if conn.execute("SELECT 1 FROM matches WHERE code = ?",
+                        (code,)).fetchone() is None:
+            return None
+        if conn.execute("SELECT 1 FROM match_players WHERE code = ? AND name = ?",
+                        (code, name)).fetchone():
+            return "taken"
+        (count,) = conn.execute(
+            "SELECT COUNT(*) FROM match_players WHERE code = ?", (code,)).fetchone()
+        if count >= MATCH_MAX_PLAYERS:
+            return "full"
+        conn.execute(
+            "INSERT INTO match_players (code, name, joined) VALUES (?, ?, ?)",
+            (code, name, now))
+        conn.commit()
+        return "ok"
+
+
+def submit_move(code, name, base_version, state, turn):
+    """Turn- and version-gated move. Returns (status, match) where status is
+    'ok' | 'conflict' | 'forbidden' | 'notfound'."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _lock:
+        conn = connection()
+        row = conn.execute(
+            "SELECT turn, version FROM matches WHERE code = ?", (code,)).fetchone()
+        if row is None:
+            return "notfound", None
+        cur_turn, cur_version = row
+        joined = conn.execute(
+            "SELECT 1 FROM match_players WHERE code = ? AND name = ?",
+            (code, name)).fetchone()
+        if not joined or (cur_turn is not None and cur_turn != name):
+            return "forbidden", _match_row(conn, code)
+        if base_version != cur_version:
+            return "conflict", _match_row(conn, code)
+        conn.execute(
+            "UPDATE matches SET state = ?, turn = ?, version = ?, updated = ? "
+            "WHERE code = ?",
+            (json.dumps(state), turn, cur_version + 1, now, code))
+        conn.commit()
+        return "ok", _match_row(conn, code)
+
+
 def reset_for_tests():
     """Testing hook: wipe all tables (used with a temp ARCADE_DB_PATH)."""
     with _lock:
         conn = connection()
-        conn.execute("DELETE FROM scores")
-        conn.execute("DELETE FROM sessions")
-        conn.execute("DELETE FROM session_players")
+        for t in ("scores", "sessions", "session_players",
+                  "matches", "match_players"):
+            conn.execute(f"DELETE FROM {t}")
         conn.commit()
