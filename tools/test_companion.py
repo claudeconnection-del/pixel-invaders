@@ -14,6 +14,7 @@ from games.battleship.model import BattleshipModel, PLAYERS, OTHER  # noqa: E402
 from games.battleship.ai import ai_fire  # noqa: E402
 from games.battleship import game as bs  # noqa: E402
 from games.board.companion.session import SecretLocalSession  # noqa: E402
+from games.board.companion.server import CompanionServer  # noqa: E402
 
 
 def _played_game(seed, max_shots=80):
@@ -175,12 +176,55 @@ def test_full_game_via_session():
     print(f"full game via session OK (winner={s.winner}, {guard} shots)")
 
 
+# -------------------------------------------------------------- server tests
+def test_server_loopback():
+    """Full HTTP round-trip over loopback: serve the app, reject a bad code,
+    seat two players, ready them, and poll a private view back."""
+    import json
+    import urllib.request
+
+    s = _bs_session(code="WAVE")
+    srv = CompanionServer(s, app_html=b"<!doctype html><title>t</title>hi",
+                          host="127.0.0.1")
+    _, port = srv.start()
+    base = f"http://127.0.0.1:{port}"
+
+    def post(path, obj):
+        req = urllib.request.Request(
+            base + path, data=json.dumps(obj).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        return json.loads(urllib.request.urlopen(req, timeout=5).read().decode())
+
+    def get(path, timeout=30):
+        return urllib.request.urlopen(base + path, timeout=timeout).read()
+
+    try:
+        assert b"hi" in get("/")                       # app served at /
+        assert post("/join", {"code": "NOPE", "name": "Ann"})["error"] == "wrong_code"
+        a = post("/join", {"code": "WAVE", "name": "Ann"})
+        b = post("/join", {"code": "WAVE", "name": "Bo"})
+        assert a["seat"] == "P1" and b["seat"] == "P2"
+        post("/action", {"seat": "P1", "token": a["token"], "kind": "ready"})
+        post("/action", {"seat": "P2", "token": b["token"], "kind": "ready"})
+        s.pump(); s.pump()
+        assert s.model.phase == "fire"
+        r = json.loads(get(f"/poll?seat=P1&token={a['token']}&v=-1").decode())
+        assert r["view"]["you"] == "P1"
+        # status reflects both seats joined
+        st = json.loads(get("/status").decode())
+        assert [x["seat"] for x in st["seats"]] == ["P1", "P2"]
+    finally:
+        srv.stop()
+    print("server loopback OK")
+
+
 def main():
     test_secrecy_invariant()
     test_join_rules()
     test_turn_gate_and_versions()
     test_anim_gate_blocks_pump()
     test_full_game_via_session()
+    test_server_loopback()
     print("ALL COMPANION TESTS PASSED")
 
 
