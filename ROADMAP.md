@@ -49,7 +49,12 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   remaining card games.
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
-1. **Rummy** — draw/discard, melds, simple AI.
+1. **Rummy (Gin)** — 🔧 headless core DONE: `games/rummy/model.py` (deal/draw/discard/knock,
+   `best_deadwood` meld engine, gin/undercut scoring) + `games/rummy/ai.py` (fair heuristic) +
+   `tools/test_rummy.py` (green: meld engine, scoring, AI-vs-AI to completion). **NEXT: the
+   cabinet view** — `games/rummy/game.py` (INFO, GinRummyRun, hand render via `cards/render`, AI
+   opponent, knock UI), register in TABLETOP; then achievements. (Lay-offs onto the knocker's
+   melds were deferred — noted in model.py.)
 2. **Poker** — 5-card **video poker** (hold/draw + payouts) first; heads-up vs-AI optional later.
 3. **Backgammon** — 24 points + dice, pip-count greedy AI; adds **board/checker skins**.
 
