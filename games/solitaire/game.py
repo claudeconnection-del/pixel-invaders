@@ -20,6 +20,7 @@ from ambient.preset import AmbientPreset
 from games.cards import render as card_render
 from games.cards import skins
 from games.cards.deck import SUITS, Card
+from games.solitaire.achievements import ACHIEVEMENTS as _SOL_ACHIEVEMENTS
 from games.solitaire.model import Solitaire
 
 INFO = GameInfo(
@@ -30,7 +31,9 @@ INFO = GameInfo(
     has_scores=False, attract=False, game_music=True, music_pool="menu",
 )
 
-ACHIEVEMENTS = []   # filled in the achievements increment (I4)
+ACHIEVEMENTS = _SOL_ACHIEVEMENTS
+_GRIND_KEYS = ("sol_games", "sol_wins", "sol_streak", "sol_best_streak",
+               "sol_best_time")
 
 # table layout (logical UI units; the table is centred in the full width)
 CARD_W, CARD_H = 96, 132
@@ -89,6 +92,12 @@ class SolitaireRun(GameRun):
         tt = self._tt()
         self.deck = skins.deck_by_id(tt.get("deck", "classic"))
         self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
+        life = section["lifetime"]
+        for k in _GRIND_KEYS:
+            life.setdefault(k, 0)
+        life["sol_games"] += 1          # this freshly-dealt game counts as played
+        self._sync_unlocks()
+        self.save_cb()
 
     def _tt(self):
         """The shared tabletop cosmetics store (settings['tabletop']), with
@@ -121,7 +130,27 @@ class SolitaireRun(GameRun):
         return out
 
     def run_stats(self):
-        return {}
+        return {"time": self.time, "moves": self.model.moves,
+                "undos": self.model.undo_count, "won": self.model.won}
+
+    def _sync_unlocks(self):
+        """Mirror any earned cosmetic-unlock achievements into the shared
+        tabletop store so the tied premium deck/felt becomes selectable."""
+        if self.section is None or self.settings is None:
+            return
+        tt = self._tt()
+        got = set(self.section.get("achievements", {}).keys())
+        changed = False
+        for d in skins.DECKS:
+            if d.premium in got and d.id not in tt["unlocked_decks"]:
+                tt["unlocked_decks"].append(d.id)
+                changed = True
+        for f in skins.FELTS:
+            if f.premium in got and f.id not in tt["unlocked_felts"]:
+                tt["unlocked_felts"].append(f.id)
+                changed = True
+        if changed:
+            self.save_cb()
 
     def run_summary(self):
         return {"win": self.model.won}
@@ -129,6 +158,7 @@ class SolitaireRun(GameRun):
     # ------------------------------------------------------------- input
     def update(self, dt, inp):
         self.time += dt                     # felt keeps animating even in panel
+        self._sync_unlocks()                # grant cosmetics as achievements land
         mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
         if not self.customize and mb and not self._prev_mb:
             self._click(inp.aim_x, inp.aim_y)
@@ -179,9 +209,14 @@ class SolitaireRun(GameRun):
         self.emit("sol_move")
 
     def _new_deal(self):
+        if self.section is not None and not self.won_flag:
+            self.section["lifetime"]["sol_streak"] = 0   # gave up: streak breaks
         self.model = Solitaire(self.draw_count).deal(random.Random())
         self.sel = None
         self.won_flag = False
+        if self.section is not None:
+            self.section["lifetime"]["sol_games"] += 1
+            self.save_cb()
         self.emit("sol_deal")
 
     def _click(self, px, py):
@@ -251,7 +286,17 @@ class SolitaireRun(GameRun):
     def _check_win(self):
         if self.model.won and not self.won_flag:
             self.won_flag = True
-            self.emit("sol_win")
+            if self.section is not None:
+                life = self.section["lifetime"]
+                life["sol_wins"] = life.get("sol_wins", 0) + 1
+                life["sol_streak"] = life.get("sol_streak", 0) + 1
+                life["sol_best_streak"] = max(life.get("sol_best_streak", 0),
+                                              life["sol_streak"])
+                t = int(self.time)
+                if not life.get("sol_best_time") or t < life["sol_best_time"]:
+                    life["sol_best_time"] = t
+                self.save_cb()
+            self.emit("sol_win")        # engine sees the updated counters here
 
     # ------------------------------------------------------------ hit-test
     def _ox(self):

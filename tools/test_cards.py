@@ -122,6 +122,27 @@ def test_collect_and_win():
     print("collect + win OK")
 
 
+def test_solitaire_achievements():
+    from games.solitaire.achievements import ACHIEVEMENTS
+    by = {a.id: a for a in ACHIEVEMENTS}
+    assert by["first_win"].check("sol_win", None, {}, {})
+    assert not by["first_win"].check("sol_deal", None, {}, {})
+    assert by["speed_run"].check("sol_win", None, {}, {"time": 120})
+    assert not by["speed_run"].check("sol_win", None, {}, {"time": 999})
+    assert by["no_undo"].check("sol_win", None, {}, {"undos": 0})
+    assert not by["no_undo"].check("sol_win", None, {}, {"undos": 2})
+    assert by["streak_3"].check("sol_win", None, {"sol_streak": 3}, {})
+    assert not by["streak_3"].check("sol_win", None, {"sol_streak": 2}, {})
+    # grind milestones fire from counters alone (progress-checked every frame)
+    assert by["century"].check(None, None, {"sol_games": 100}, {})
+    assert not by["century"].check(None, None, {"sol_games": 99}, {})
+    assert by["millennium"].check(None, None, {"sol_games": 1000}, {})
+    assert by["founder"].check(None, None, {"sol_wins": 250}, {})
+    assert by["century"].progress({"sol_games": 40}, {}) == (40, 100)
+    assert by["millennium"].progress({"sol_games": 5000}, {}) == (1000, 1000)
+    print(f"solitaire achievements OK ({len(ACHIEVEMENTS)} incl. grind)")
+
+
 def main():
     test_deck()
     test_skins()
@@ -129,6 +150,7 @@ def main():
     test_stock_draw_recycle()
     test_move_rules_and_undo()
     test_collect_and_win()
+    test_solitaire_achievements()
     print("ALL CARD TESTS PASSED")
 
 
