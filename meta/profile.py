@@ -53,6 +53,13 @@ DEFAULT_PROFILE = {
         "idle_screen": "attract",  # attract | ambient | off (menu idle behaviour)
         "ambient_mode": "embers",  # default ambient preset id (built-in)
         "ambient_sound": "preset",  # preset | silence (global ambient sound override)
+        # tabletop cosmetics — shared across the solo card/tabletop games
+        "tabletop": {
+            "deck": "classic",
+            "felt": "emberlight",
+            "unlocked_decks": [],   # cosmetic ids granted by achievements
+            "unlocked_felts": [],
+        },
         "player_name": "AAA",  # arcade initials
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8083
     },

@@ -376,6 +376,22 @@ def main():
     sr.handle_key(pygame.K_SPACE)           # autoplay to foundations
     sr.handle_key(pygame.K_n)               # fresh deal
     assert sr.model.cards_home == 0 and len(sr.model.stock) == 24
+
+    # skin picker: TAB opens; cycle deck + felt; persists to settings["tabletop"]
+    sr.handle_key(pygame.K_TAB)
+    assert sr.customize
+    deck0 = sr.deck.id
+    sr.handle_key(pygame.K_RIGHT)           # next deck
+    sr.handle_key(pygame.K_DOWN)            # to the felt row
+    felt0 = sr.felt.id
+    sr.handle_key(pygame.K_RIGHT)           # next felt
+    render_frame()                          # draws the panel + live preview
+    assert sr.deck.id != deck0 and sr.felt.id != felt0
+    tt = app.profile["settings"]["tabletop"]
+    assert tt["deck"] == sr.deck.id and tt["felt"] == sr.felt.id
+    sr.handle_key(pygame.K_TAB)
+    assert not sr.customize
+
     from games.cards.deck import Card
     full = lambda s: [Card(r, s) for r in range(1, 14)]
     sr.model.foundations = {"S": full("S"), "H": full("H"), "D": full("D"),
