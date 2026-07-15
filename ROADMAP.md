@@ -39,9 +39,14 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   deck/felt skin registries + overlay card render), new **TABLETOP** category, `games/solitaire/`
   (Klondike rules + table + click-to-pick/drop play, **double-click → foundation** from anywhere,
   **auto-complete** prompt that pops in once no tableau card is face-down and cascades the finish,
-  `TAB` deck/felt skin picker incl. dynamic ambient-scene felts, grind achievements
-  century/millennium=1000-games/founder + cosmetic unlocks). Cosmetics store: `settings["tabletop"]`.
-  This is the solid base for the remaining card games.
+  `TAB` deck/felt skin picker, grind achievements century/millennium=1000-games/founder +
+  cosmetic unlocks). Cosmetics store: `settings["tabletop"]`. **Rich skin library**: 21 decks
+  (geometric backs — grid/checker/dots/brick/diamond/cross/pinstripe/frames/emblem — via
+  `cards.render` BACK_PATTERNS + `back_bg`; high-contrast light/dark faces) and 24 felts
+  (solids incl. high-contrast, gradients, `pattern:` geometric washes carbon/grid/checker/dots,
+  and dynamic `scene:` felts). The geometric `lattice` scene is shared with ambient mode (a new
+  free "Lattice" preset — 7 free / 3 premium ambient scenes now). This is the solid base for the
+  remaining card games.
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
 1. **Rummy** — draw/discard, melds, simple AI.

@@ -127,6 +127,22 @@ def fireplace(preset, t, r, b):
                         tint=_emit(_pal(preset, i), 1.95, alpha), z=(_h(i, 6) - 0.5) * 3)
 
 
+def lattice(preset, t, r, b):
+    """A drifting glowing grid — geometric calm. Shared with the tabletop
+    'Matrix' / 'Prism' felts and available as an ambient mode of its own."""
+    sp = preset.speed
+    cols, rows = 14, 9
+    x0, x1, y0, y1 = -180, 820, 30, 700
+    for gy in range(rows):
+        for gx in range(cols):
+            fx = x0 + (gx + 0.5) * (x1 - x0) / cols + math.sin(t * 0.5 * sp + gy) * 12
+            fy = y0 + (gy + 0.5) * (y1 - y0) / rows + math.cos(t * 0.4 * sp + gx) * 9
+            ph = gx * 0.6 + gy * 0.5
+            glow = 0.5 + 0.5 * math.sin(t * 1.2 * sp + ph)
+            b.add_cube_late(fx, fy, 0.10 + 0.06 * glow,
+                            tint=_emit(_pal(preset, gx + gy), 1.4, 0.22 + 0.55 * glow))
+
+
 def equalizer(preset, t, r, b):
     """Premium: a row of gently pulsing voxel bars (a nod to Voxel Studio's
     equalizer). Non-reactive for now — driven by time, not audio."""
@@ -151,6 +167,7 @@ SCENES = {
     "rain": rain,
     "nebula": nebula,
     "fireplace": fireplace,
+    "lattice": lattice,
     "equalizer": equalizer,
 }
 
@@ -162,5 +179,6 @@ SCENE_STARS = {
     "rain": False,
     "nebula": True,
     "fireplace": False,
+    "lattice": False,
     "equalizer": False,
 }

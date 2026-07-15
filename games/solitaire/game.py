@@ -434,6 +434,9 @@ class SolitaireRun(GameRun):
         if f.scene:
             o.rect(0, 0, W, H, (8, 8, 12, 70))         # gentle darken for contrast
             return
+        if f.pattern:
+            self._draw_felt_pattern(o, W, H, f.colors, f.pattern)
+            return
         cols = f.colors
         if f.kind == "solid" or len(cols) < 2:
             o.rect(0, 0, W, H, (cols[0][0], cols[0][1], cols[0][2], 255))
@@ -445,6 +448,36 @@ class SolitaireRun(GameRun):
                  int(top[1] + (bot[1] - top[1]) * t),
                  int(top[2] + (bot[2] - top[2]) * t), 255)
             o.rect(0, H * k / n, W + 2, H / n + 1, c)
+
+    def _draw_felt_pattern(self, o, W, H, cols, pat):
+        base = cols[0]
+        fg = cols[1] if len(cols) > 1 else base
+        o.rect(0, 0, W, H, (base[0], base[1], base[2], 255))
+        strong = (fg[0], fg[1], fg[2], 120)
+        faint = (fg[0], fg[1], fg[2], 70)
+        Wi, Hi = int(W), int(H)
+        if pat == "grid":
+            for x in range(0, Wi + 64, 64):
+                o.rect(x, 0, 2, H, strong)
+            for y in range(0, Hi + 64, 64):
+                o.rect(0, y, W, 2, strong)
+        elif pat == "carbon":
+            for x in range(0, Wi + 26, 26):
+                o.rect(x, 0, 1, H, faint)
+            for y in range(0, Hi + 26, 26):
+                o.rect(0, y, W, 1, faint)
+        elif pat == "checker":
+            step = 74
+            wash = (fg[0], fg[1], fg[2], 55)
+            for j in range(Hi // step + 2):
+                for i in range(Wi // step + 2):
+                    if (i + j) % 2 == 0:
+                        o.rect(i * step, j * step, step, step, wash)
+        elif pat == "dots":
+            step = 66
+            for y in range(step // 2, Hi + step, step):
+                for x in range(step // 2, Wi + step, step):
+                    o.rect(x - 3, y - 3, 6, 6, strong)
 
     def draw_hud(self, o, width, height, section):
         o.offset_x = 0.0

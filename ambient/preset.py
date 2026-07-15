@@ -59,6 +59,9 @@ DEFAULTS = [
     AmbientPreset("fireplace", "Fireplace", "fireplace",
                   [_rgb(theme.EMBER), _rgb(theme.RUST), _rgb(theme.HONEY)],
                   speed=1.1, density="medium", dim=0.1, sound="bed:ambient"),
+    AmbientPreset("lattice", "Lattice", "lattice",
+                  [_rgb(theme.SAGE), _rgb(theme.FROST), _rgb(theme.LAGOON)],
+                  speed=0.6, density="medium", dim=0.18),
     # Premium — hidden until a flagship (non-multiplayer) achievement unlocks
     # it. Unlock ids are the real achievement ids from each game's ACHIEVEMENTS.
     AmbientPreset("supernova", "Supernova", "nebula",
