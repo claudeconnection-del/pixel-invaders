@@ -7,6 +7,7 @@ destination to drop; double-click sends a card home). Keyboard shortcuts cover
 undo / autoplay / new deal. Achievements + grind counters + skin selection are
 wired in later increments; this increment makes it playable.
 """
+import math
 import random
 
 import pygame
@@ -75,6 +76,12 @@ class SolitaireRun(GameRun):
         # skin customization panel (TAB) — deck + felt, shared across tabletop
         self.customize = False
         self.custom_row = 0        # 0 = Deck, 1 = Felt
+
+        # auto-complete: once no tableau card is face-down the game can always
+        # be finished; a prompt appears and it plays out card-by-card
+        self.autocompleting = False
+        self._auto_timer = 0.0
+        self._auto_btn = None      # clickable rect while the prompt is up
 
     # ------------------------------------------------------ cabinet contract
     @property
@@ -159,11 +166,59 @@ class SolitaireRun(GameRun):
     def update(self, dt, inp):
         self.time += dt                     # felt keeps animating even in panel
         self._sync_unlocks()                # grant cosmetics as achievements land
+        if self.autocompleting:
+            self._tick_autocomplete(dt)
+            self._prev_mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
+            return
         mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
         if not self.customize and mb and not self._prev_mb:
             self._click(inp.aim_x, inp.aim_y)
         self._prev_mb = mb
         self._hover = None if self.customize else self._hit(inp.aim_x, inp.aim_y)
+
+    def _tick_autocomplete(self, dt):
+        if self.won_flag:
+            self.autocompleting = False
+            return
+        self._auto_timer -= dt
+        if self._auto_timer > 0:
+            return
+        self._auto_timer = 0.06                 # one card every ~60ms
+        result = self._auto_step()
+        if result == "home":
+            self.emit("sol_home")
+            self._check_win()
+        elif result == "draw":
+            self.emit("sol_draw")
+        else:
+            self.autocompleting = False         # nothing left to do
+        if self.won_flag:
+            self.autocompleting = False          # stop the instant it's won
+
+    def _auto_step(self):
+        """One move toward finishing a solved board: play a top card home, or
+        turn the stock to expose more. Returns 'home' | 'draw' | None."""
+        if self.model.waste_to_foundation():
+            return "home"
+        for i in range(7):
+            if self.model.tableau_to_foundation(i):
+                return "home"
+        if self.model.stock or self.model.waste:
+            if self.model.draw():
+                return "draw"
+        return None
+
+    def _solvable(self):
+        """True once every tableau card is face-up — from here the deal can
+        always be won by cascading to the foundations."""
+        return (not self.won_flag and self.model.cards_home < 52
+                and all(not p["down"] for p in self.model.tableau))
+
+    def _start_autocomplete(self):
+        if self._solvable():
+            self.autocompleting = True
+            self._auto_timer = 0.0
+            self.sel = None
 
     def handle_key(self, key):
         if self.customize:
@@ -176,8 +231,10 @@ class SolitaireRun(GameRun):
             if self.model.undo():
                 self.emit("sol_undo")
         elif key == pygame.K_SPACE:
-            if self.model.collect_to_foundations():
-                self.emit("sol_home")
+            if self._solvable():
+                self._start_autocomplete()          # finish a solved board
+            elif self.model.collect_to_foundations():
+                self.emit("sol_home")               # else: send safe tops home
                 self._check_win()
         elif key == pygame.K_n:
             self._new_deal()
@@ -214,12 +271,17 @@ class SolitaireRun(GameRun):
         self.model = Solitaire(self.draw_count).deal(random.Random())
         self.sel = None
         self.won_flag = False
+        self.autocompleting = False
         if self.section is not None:
             self.section["lifetime"]["sol_games"] += 1
             self.save_cb()
         self.emit("sol_deal")
 
     def _click(self, px, py):
+        # the auto-complete prompt (when up) takes priority over the board
+        if self._auto_btn and _in(px, py, *self._auto_btn):
+            self._start_autocomplete()
+            return
         t = self._hit(px, py)
         if t is None:
             self.sel = None
@@ -232,19 +294,36 @@ class SolitaireRun(GameRun):
         dbl = (self._last_click and self._last_click[0] == t
                and self.time - self._last_click[1] < 0.4)
         self._last_click = (t, self.time)
-
+        # double-click a card -> straight to its foundation ("obvious place"),
+        # regardless of any current selection
+        if dbl and self._auto_home(t):
+            self.sel = None
+            return
         if self.sel is None:
-            self._select(t, dbl)
+            self._select(t)
         else:
             self._drop(t)
 
-    def _select(self, t, dbl):
-        kind = t[0]
-        if kind == "waste" and self.model.waste:
-            if dbl and self.model.waste_to_foundation():
+    def _auto_home(self, t):
+        """Send the clicked card home if it's a foundation-legal top card."""
+        if t[0] == "waste":
+            if self.model.waste_to_foundation():
                 self.emit("sol_home")
                 self._check_win()
-                return
+                return True
+        elif t[0] == "tableau" and t[2] != "empty":
+            col, k = t[1], t[2]
+            p = self.model.tableau[col]
+            if k == len(p["down"]) + len(p["up"]) - 1 \
+                    and self.model.tableau_to_foundation(col):
+                self.emit("sol_home")
+                self._check_win()
+                return True
+        return False
+
+    def _select(self, t):
+        kind = t[0]
+        if kind == "waste" and self.model.waste:
             self.sel = {"kind": "waste"}
         elif kind == "tableau":
             col, k = t[1], t[2]
@@ -254,12 +333,8 @@ class SolitaireRun(GameRun):
             ndown = len(p["down"])
             if k < ndown:            # a face-down card: not selectable
                 return
-            u = k - ndown
-            if dbl and u == len(p["up"]) - 1 and self.model.tableau_to_foundation(col):
-                self.emit("sol_home")
-                self._check_win()
-                return
-            self.sel = {"kind": "tableau", "col": col, "count": len(p["up"]) - u}
+            self.sel = {"kind": "tableau", "col": col,
+                        "count": len(p["up"]) - (k - ndown)}
         elif kind == "foundation" and self.model.foundations[t[1]]:
             self.sel = {"kind": "foundation", "suit": t[1]}
 
@@ -414,11 +489,33 @@ class SolitaireRun(GameRun):
         for i in range(7):
             self._draw_column(o, i)
 
+        self._draw_auto_prompt(o, W)
         self._draw_footer(o, W, H)
         if self.won_flag:
             self._draw_win(o, W, H)
         if self.customize:
             self._draw_customize(o, W, H)
+
+    def _draw_auto_prompt(self, o, W):
+        """Show the auto-complete affordance once the board is solved."""
+        self._auto_btn = None
+        if self.won_flag:
+            return
+        if self.autocompleting:
+            o.text("AUTO-COMPLETING…", W / 2, 34, size=22, color=GOLD, center=True)
+        elif self._solvable():
+            label = "AUTO-COMPLETE"
+            bw = o.text_width(label, size=22) + 60
+            bh = 42
+            bx, by = W / 2 - bw / 2, 20
+            pulse = int(150 + 90 * abs(math.sin(self.time * 3)))
+            o.rect(bx, by, bw, bh, PANEL)
+            o.rect(bx, by, bw, 3, (255, 210, 90, pulse))
+            o.rect(bx, by + bh - 3, bw, 3, (255, 210, 90, pulse))
+            o.text(label, W / 2, by + 10, size=22, color=GOLD, center=True)
+            o.text("Space or click", W / 2, by + bh + 4, size=12, color=DIM,
+                   center=True)
+            self._auto_btn = (bx, by, bw, bh)
 
     def _draw_column(self, o, i):
         cx = self._col_x(i)

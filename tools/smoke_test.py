@@ -399,23 +399,25 @@ def main():
     sr.model.tableau = [{"down": [], "up": [Card(13, "C")]}] + \
                        [{"down": [], "up": []} for _ in range(6)]
     sr.model.stock, sr.model.waste = [], []
-    app.handle_keydown(pygame.K_SPACE)      # collect the King -> win + emit event
-    assert sr.model.won and sr.won_flag
-    render_frame()                          # draws the win overlay
-    # route two frames through the app so the engine unlocks first_win and the
-    # per-frame sync grants the tied cosmetic (Ember Royale deck)
+    assert sr._solvable()                   # no face-down cards -> auto-complete
+    app.handle_keydown(pygame.K_SPACE)      # solved board -> starts auto-complete
+    assert sr.autocompleting
     app.gameplay_input = lambda: InputState()
-    app.update_playing(dt)
+    for _ in range(6):                      # auto-complete plays out to a win
+        app.update_playing(dt)
+        if sr.model.won:
+            break
+    assert sr.model.won and sr.won_flag and not sr.autocompleting
+    render_frame()                          # draws the win overlay
     sol_sec = profile_mod.game_section(app.profile, "solitaire")
-    assert "first_win" in sol_sec["achievements"]
-    assert sol_sec["lifetime"]["sol_wins"] >= 1
-    app.update_playing(dt)
+    assert "first_win" in sol_sec["achievements"] and sol_sec["lifetime"]["sol_wins"] >= 1
+    app.update_playing(dt)                  # per-frame sync grants the cosmetic
     assert "ember_royale" in app.profile["settings"]["tabletop"]["unlocked_decks"]
     app.handle_keydown(pygame.K_ESCAPE)     # pause
     app.handle_keydown(pygame.K_q)          # quit to menu
     assert app.state == game_main.MENU
-    print(f"solitaire OK (play / skins / win + first_win unlock -> "
-          f"cosmetic, {sol_sec['lifetime']['sol_games']} games)")
+    print(f"solitaire OK (play / skins / auto-complete win + unlock, "
+          f"{sol_sec['lifetime']['sol_games']} games)")
 
     pygame.quit()
     print("SMOKE TEST PASSED")

@@ -143,6 +143,33 @@ def test_solitaire_achievements():
     print(f"solitaire achievements OK ({len(ACHIEVEMENTS)} incl. grind)")
 
 
+def test_autocomplete_and_double_click():
+    import games.solitaire.game as solgame
+    run = solgame.create_run("draw1", random.Random(1))
+    assert not run._solvable()                 # face-down cards at deal
+    # double-click sends the obvious card home: Ace of spades on the waste
+    run.model.foundations = {s: [] for s in SUITS}
+    run.model.waste = [Card(1, "S")]
+    assert run._auto_home(("waste",)) and run.model.foundations["S"] == [Card(1, "S")]
+
+    # contrive a solved board (nothing face-down, one card left to place)
+    run.model.foundations = {"S": [Card(r, "S") for r in range(1, 13)],  # up to Q
+                             "H": [Card(r, "H") for r in range(1, 14)],
+                             "D": [Card(r, "D") for r in range(1, 14)],
+                             "C": [Card(r, "C") for r in range(1, 14)]}
+    run.model.tableau = [{"down": [], "up": [Card(13, "S")]}] + \
+                        [{"down": [], "up": []} for _ in range(6)]
+    run.model.stock, run.model.waste = [], []
+    run.won_flag = False
+    assert run._solvable()
+    steps = 0
+    while not run.model.won and steps < 80:
+        assert run._auto_step() is not None    # always progresses
+        steps += 1
+    assert run.model.won and not run._solvable()
+    print("autocomplete + double-click OK")
+
+
 def main():
     test_deck()
     test_skins()
@@ -151,6 +178,7 @@ def main():
     test_move_rules_and_undo()
     test_collect_and_win()
     test_solitaire_achievements()
+    test_autocomplete_and_double_click()
     print("ALL CARD TESTS PASSED")
 
 

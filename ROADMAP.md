@@ -37,9 +37,11 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   *Feature-complete; pending the owner's live QA.*
 - **Card/tabletop suite — Solitaire slice COMPLETE.** Shared `games/cards/` kit (deck model +
   deck/felt skin registries + overlay card render), new **TABLETOP** category, `games/solitaire/`
-  (Klondike rules + table + mouse play + `TAB` deck/felt skin picker incl. dynamic ambient-scene
-  felts + grind achievements century/millennium=1000-games/founder + cosmetic unlocks). Cosmetics
-  store: `settings["tabletop"]`.
+  (Klondike rules + table + click-to-pick/drop play, **double-click → foundation** from anywhere,
+  **auto-complete** prompt that pops in once no tableau card is face-down and cascades the finish,
+  `TAB` deck/felt skin picker incl. dynamic ambient-scene felts, grind achievements
+  century/millennium=1000-games/founder + cosmetic unlocks). Cosmetics store: `settings["tabletop"]`.
+  This is the solid base for the remaining card games.
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
 1. **Rummy** — draw/discard, melds, simple AI.
