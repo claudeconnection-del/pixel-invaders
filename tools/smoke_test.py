@@ -377,9 +377,9 @@ def main():
     sr.handle_key(pygame.K_n)               # fresh deal
     assert sr.model.cards_home == 0 and len(sr.model.stock) == 24
 
-    # skin picker: TAB opens; cycle deck + felt; persists to settings["tabletop"]
+    # skin picker (shared table.SkinPicker): TAB opens; cycle deck + felt
     sr.handle_key(pygame.K_TAB)
-    assert sr.customize
+    assert sr.picker.open
     deck0 = sr.deck.id
     sr.handle_key(pygame.K_RIGHT)           # next deck
     sr.handle_key(pygame.K_DOWN)            # to the felt row
@@ -390,7 +390,7 @@ def main():
     tt = app.profile["settings"]["tabletop"]
     assert tt["deck"] == sr.deck.id and tt["felt"] == sr.felt.id
     sr.handle_key(pygame.K_TAB)
-    assert not sr.customize
+    assert not sr.picker.open
 
     from games.cards.deck import Card
     full = lambda s: [Card(r, s) for r in range(1, 14)]

@@ -13,14 +13,11 @@ import random
 import pygame
 
 from arcade.game_api import GameInfo, GameRun
-from game import theme
 from game.theme import TEXT, DIM, EMBER, GOLD, PANEL
-from render.renderer import Batcher
-from ambient import scenes as ambient_scenes
-from ambient.preset import AmbientPreset
 from games.cards import render as card_render
 from games.cards import skins
-from games.cards.deck import SUITS, Card
+from games.cards import table
+from games.cards.deck import SUITS
 from games.solitaire.achievements import ACHIEVEMENTS as _SOL_ACHIEVEMENTS
 from games.solitaire.model import Solitaire
 
@@ -62,9 +59,8 @@ class SolitaireRun(GameRun):
 
         self.deck = skins.deck_by_id("classic")
         self.felt = skins.felt_by_id("emberlight")
-        self._felt_preset = AmbientPreset(
-            "felt", "felt", self.felt.scene or "nebula",
-            [list(c) for c in self.felt.colors], speed=0.5, density="medium")
+        self._felt_preset = table.make_felt_preset(self.felt)
+        self.picker = table.SkinPicker(self)   # shared TAB deck/felt picker
 
         self.sel = None            # current selection (source)
         self._prev_mb = False
@@ -72,10 +68,6 @@ class SolitaireRun(GameRun):
         self._hover = None
         self.won_flag = False
         self._W, self._H = 1280, 860
-
-        # skin customization panel (TAB) — deck + felt, shared across tabletop
-        self.customize = False
-        self.custom_row = 0        # 0 = Deck, 1 = Felt
 
         # auto-complete: once no tableau card is face-down the game can always
         # be finished; a prompt appears and it plays out card-by-card
@@ -96,7 +88,7 @@ class SolitaireRun(GameRun):
         self.section = section
         self.settings = settings
         self.save_cb = save_cb
-        tt = self._tt()
+        tt = table.tabletop_store(settings)
         self.deck = skins.deck_by_id(tt.get("deck", "classic"))
         self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
         life = section["lifetime"]
@@ -106,28 +98,9 @@ class SolitaireRun(GameRun):
         self._sync_unlocks()
         self.save_cb()
 
-    def _tt(self):
-        """The shared tabletop cosmetics store (settings['tabletop']), with
-        defaults backfilled for old saves."""
-        tt = (self.settings or {}).setdefault("tabletop", {}) \
-            if self.settings is not None else {}
-        tt.setdefault("deck", "classic")
-        tt.setdefault("felt", "emberlight")
-        tt.setdefault("unlocked_decks", [])
-        tt.setdefault("unlocked_felts", [])
-        return tt
-
     def _set_felt(self, felt):
         self.felt = felt
-        self._felt_preset = AmbientPreset(
-            "felt", "felt", felt.scene or "nebula",
-            [list(c) for c in felt.colors], speed=0.5, density="medium")
-
-    def _avail_decks(self):
-        return skins.available_decks(set(self._tt().get("unlocked_decks", [])))
-
-    def _avail_felts(self):
-        return skins.available_felts(set(self._tt().get("unlocked_felts", [])))
+        self._felt_preset = table.make_felt_preset(felt)
 
     def emit(self, etype, **data):
         self.events.append((etype, data))
@@ -145,7 +118,7 @@ class SolitaireRun(GameRun):
         tabletop store so the tied premium deck/felt becomes selectable."""
         if self.section is None or self.settings is None:
             return
-        tt = self._tt()
+        tt = table.tabletop_store(self.settings)
         got = set(self.section.get("achievements", {}).keys())
         changed = False
         for d in skins.DECKS:
@@ -171,10 +144,10 @@ class SolitaireRun(GameRun):
             self._prev_mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
             return
         mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
-        if not self.customize and mb and not self._prev_mb:
+        if not self.picker.open and mb and not self._prev_mb:
             self._click(inp.aim_x, inp.aim_y)
         self._prev_mb = mb
-        self._hover = None if self.customize else self._hit(inp.aim_x, inp.aim_y)
+        self._hover = None if self.picker.open else self._hit(inp.aim_x, inp.aim_y)
 
     def _tick_autocomplete(self, dt):
         if self.won_flag:
@@ -221,12 +194,11 @@ class SolitaireRun(GameRun):
             self.sel = None
 
     def handle_key(self, key):
-        if self.customize:
-            self._panel_key(key)
+        if self.picker.open:
+            self.picker.handle_key(key)
             return True
         if key == pygame.K_TAB:             # open the skin picker (deck + felt)
-            self.customize = True
-            self.custom_row = 0
+            self.picker.toggle()
         elif key in (pygame.K_u, pygame.K_z):
             if self.model.undo():
                 self.emit("sol_undo")
@@ -239,31 +211,6 @@ class SolitaireRun(GameRun):
         elif key == pygame.K_n:
             self._new_deal()
         return True
-
-    def _panel_key(self, key):
-        if key == pygame.K_TAB:             # Esc is eaten by the cabinet (pause)
-            self.customize = False
-        elif key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s):
-            self.custom_row = 1 - self.custom_row
-        elif key in (pygame.K_LEFT, pygame.K_a):
-            self._cycle_skin(-1)
-        elif key in (pygame.K_RIGHT, pygame.K_d):
-            self._cycle_skin(1)
-
-    def _cycle_skin(self, direction):
-        tt = self._tt()
-        if self.custom_row == 0:
-            opts = self._avail_decks()
-            i = next((k for k, d in enumerate(opts) if d.id == self.deck.id), 0)
-            self.deck = opts[(i + direction) % len(opts)]
-            tt["deck"] = self.deck.id
-        else:
-            opts = self._avail_felts()
-            i = next((k for k, f in enumerate(opts) if f.id == self.felt.id), 0)
-            self._set_felt(opts[(i + direction) % len(opts)])
-            tt["felt"] = self.felt.id
-        self.save_cb()
-        self.emit("sol_move")
 
     def _new_deal(self):
         if self.section is not None and not self.won_flag:
@@ -419,71 +366,13 @@ class SolitaireRun(GameRun):
     # ------------------------------------------------------------ drawing
     def draw(self, renderer, section):
         self._W, self._H = renderer.ui_w, renderer.ui_h
-        b = Batcher()
-        if self.felt.scene:
-            fn = ambient_scenes.SCENES.get(self.felt.scene)
-            if fn:
-                fn(self._felt_preset, self.time, renderer, b)
-            renderer.draw_scene(b, walls=False,
-                                stars=ambient_scenes.SCENE_STARS.get(self.felt.scene, True))
-        else:
-            renderer.draw_scene(b, walls=False, stars=False)
-
-    def _draw_felt_wash(self, o, W, H):
-        f = self.felt
-        if f.scene:
-            o.rect(0, 0, W, H, (8, 8, 12, 70))         # gentle darken for contrast
-            return
-        if f.pattern:
-            self._draw_felt_pattern(o, W, H, f.colors, f.pattern)
-            return
-        cols = f.colors
-        if f.kind == "solid" or len(cols) < 2:
-            o.rect(0, 0, W, H, (cols[0][0], cols[0][1], cols[0][2], 255))
-            return
-        top, bot, n = cols[0], cols[-1], 24
-        for k in range(n):
-            t = k / (n - 1)
-            c = (int(top[0] + (bot[0] - top[0]) * t),
-                 int(top[1] + (bot[1] - top[1]) * t),
-                 int(top[2] + (bot[2] - top[2]) * t), 255)
-            o.rect(0, H * k / n, W + 2, H / n + 1, c)
-
-    def _draw_felt_pattern(self, o, W, H, cols, pat):
-        base = cols[0]
-        fg = cols[1] if len(cols) > 1 else base
-        o.rect(0, 0, W, H, (base[0], base[1], base[2], 255))
-        strong = (fg[0], fg[1], fg[2], 120)
-        faint = (fg[0], fg[1], fg[2], 70)
-        Wi, Hi = int(W), int(H)
-        if pat == "grid":
-            for x in range(0, Wi + 64, 64):
-                o.rect(x, 0, 2, H, strong)
-            for y in range(0, Hi + 64, 64):
-                o.rect(0, y, W, 2, strong)
-        elif pat == "carbon":
-            for x in range(0, Wi + 26, 26):
-                o.rect(x, 0, 1, H, faint)
-            for y in range(0, Hi + 26, 26):
-                o.rect(0, y, W, 1, faint)
-        elif pat == "checker":
-            step = 74
-            wash = (fg[0], fg[1], fg[2], 55)
-            for j in range(Hi // step + 2):
-                for i in range(Wi // step + 2):
-                    if (i + j) % 2 == 0:
-                        o.rect(i * step, j * step, step, step, wash)
-        elif pat == "dots":
-            step = 66
-            for y in range(step // 2, Hi + step, step):
-                for x in range(step // 2, Wi + step, step):
-                    o.rect(x - 3, y - 3, 6, 6, strong)
+        table.draw_felt_backdrop(renderer, self.felt, self._felt_preset, self.time)
 
     def draw_hud(self, o, width, height, section):
         o.offset_x = 0.0
         W, H = self._W, self._H
         ox = self._ox()
-        self._draw_felt_wash(o, W, H)
+        table.draw_felt_wash(o, W, H, self.felt)
 
         # stock
         if self.model.stock:
@@ -526,8 +415,8 @@ class SolitaireRun(GameRun):
         self._draw_footer(o, W, H)
         if self.won_flag:
             self._draw_win(o, W, H)
-        if self.customize:
-            self._draw_customize(o, W, H)
+        if self.picker.open:
+            self.picker.draw(o)
 
     def _draw_auto_prompt(self, o, W):
         """Show the auto-complete affordance once the board is solved."""
@@ -584,27 +473,6 @@ class SolitaireRun(GameRun):
         o.text("Click: pick/drop   Double-click: send home   U: undo   "
                "Space: autoplay   N: new deal   Tab: skins",
                W / 2, H - 34, size=14, color=DIM, center=True)
-
-    def _draw_customize(self, o, W, H):
-        x, y0 = 90, 220
-        pw, ph = 480, 232
-        o.rect(x - 26, y0 - 44, pw, ph, PANEL)
-        o.rect(x - 26, y0 - 44, 4, ph, GOLD)
-        o.text("TABLE SKINS", x, y0 - 26, size=20, color=EMBER)
-        rows = [("Deck", self.deck.name), ("Felt", self.felt.name)]
-        for i, (label, val) in enumerate(rows):
-            yy = y0 + 18 + i * 42
-            sel = i == self.custom_row
-            o.text(("> " if sel else "  ") + label, x, yy, size=18,
-                   color=TEXT if sel else DIM)
-            o.text(f"< {val} >" if sel else val, x + 150, yy, size=18,
-                   color=GOLD if sel else DIM)
-        # live deck preview: a face-up sample + the back
-        card_render.draw_card(o, x + 300, y0 + 6, 66, 92, Card(1, "S"), self.deck)
-        card_render.draw_card(o, x + 372, y0 + 6, 66, 92, None, self.deck,
-                              face_up=False)
-        o.text("Up/Down: pick   Left/Right: change   Tab: close",
-               x, y0 + 128, size=13, color=DIM)
 
     def _draw_win(self, o, W, H):
         o.rect(0, 0, W, H, (10, 8, 6, 150))
