@@ -362,6 +362,35 @@ def main():
     print(f"ambient mode OK (manual + idle + bed + premium gate + mood, "
           f"{amb['counters']['total_seconds']:.1f}s)")
 
+    # solitaire (TABLETOP): deal, draw the felt+cards, autoplay, new deal, and a
+    # scripted win overlay; leaves cleanly via pause -> quit
+    app.game_id = "solitaire"
+    app.state = game_main.MENU
+    app.start_run("draw1")
+    assert app.state == game_main.PLAYING and len(app.run.model.stock) == 24
+    sr = app.run
+    for _ in range(4):
+        app.gameplay_input = lambda: InputState()
+        app.update_playing(dt)
+        render_frame()                      # exercises felt + card draw
+    sr.handle_key(pygame.K_SPACE)           # autoplay to foundations
+    sr.handle_key(pygame.K_n)               # fresh deal
+    assert sr.model.cards_home == 0 and len(sr.model.stock) == 24
+    from games.cards.deck import Card
+    full = lambda s: [Card(r, s) for r in range(1, 14)]
+    sr.model.foundations = {"S": full("S"), "H": full("H"), "D": full("D"),
+                            "C": [Card(r, "C") for r in range(1, 13)]}
+    sr.model.tableau = [{"down": [], "up": [Card(13, "C")]}] + \
+                       [{"down": [], "up": []} for _ in range(6)]
+    sr.model.stock, sr.model.waste = [], []
+    sr.handle_key(pygame.K_SPACE)           # collects the King -> win
+    assert sr.model.won and sr.won_flag
+    render_frame()                          # draws the win overlay
+    app.handle_keydown(pygame.K_ESCAPE)     # pause
+    app.handle_keydown(pygame.K_q)          # quit to menu
+    assert app.state == game_main.MENU
+    print("solitaire OK (deal / felt+cards / autoplay / win)")
+
     pygame.quit()
     print("SMOKE TEST PASSED")
 
