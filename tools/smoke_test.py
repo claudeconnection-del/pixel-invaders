@@ -419,6 +419,43 @@ def main():
     print(f"solitaire OK (play / skins / auto-complete win + unlock, "
           f"{sol_sec['lifetime']['sol_games']} games)")
 
+    # gin rummy (TABLETOP): deal, draw the table, drive human + house AI turns
+    # until a hand resolves; exercises the meld engine, render, and result screen
+    from games.rummy.model import deadwood as rm_dead
+    app.game_id = "rummy"
+    app.state = game_main.MENU
+    app.start_run("gin")
+    assert app.state == game_main.PLAYING
+    rr = app.run
+    app.gameplay_input = lambda: InputState()
+    app.update_playing(dt)                  # one real update tick (P1's turn)
+    for _ in range(80):
+        m = rr.model
+        if m.hand_over:
+            break
+        if m.turn == "P1":
+            if m.phase == "draw":
+                m.draw("stock")
+            else:
+                worst = min(m.hands["P1"],
+                            key=lambda c: rm_dead([x for x in m.hands["P1"] if x is not c]))
+                knock = rm_dead([x for x in m.hands["P1"] if x is not worst]) <= 10
+                m.discard_card(worst, knock=knock)
+                if m.hand_over:
+                    rr._announce()
+        else:
+            rr._house_turn()
+        render_frame()                      # exercises felt + hands + piles draw
+    assert all(len(rr.model.hands[p]) == 10 for p in ("P1", "P2"))
+    if rr.model.hand_over:
+        assert rr.model.result is not None
+        render_frame()                      # draws the hand-result overlay
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print(f"gin rummy OK (hand_over={rr.model.hand_over}, "
+          f"scores={rr.model.scores})")
+
     pygame.quit()
     print("SMOKE TEST PASSED")
 
