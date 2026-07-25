@@ -67,8 +67,14 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
    truth-table, payout math, deal/draw determinism, credits ledger, 10k-hand rng sweep RTP
    smoke-check). **NEXT: cabinet view** `games/poker/game.py` (hold/draw table, register
    TABLETOP, CAB-8), then achievements (CAB-9).
-3. **Backgammon** — 24 points + dice, pip-count greedy AI (CAB-10, in progress in an isolated
-   lane), then table view (CAB-11) + board/checker skins (CAB-12).
+3. **Backgammon** — ✅ **headless core done** (CAB-10): `games/backgammon/model.py`
+   (signed `points[24]` + bar/off, pip_count, dice via the run's rng with doubles = four
+   moves, `legal_moves`/`apply` honouring bar-first entry, blocking, hitting, exact/overshoot
+   bear-off, and the forced-play/higher-die rule, gammon/backgammon grading) + `ai.py` (greedy
+   pip-count/hit/made-point/blot-exposure heuristic AI, beats a random-legal-move baseline 96%
+   over 200 seeded games in `tools/test_backgammon.py`, well over the 80% bar). No doubling
+   cube yet (deferred, like Rummy's lay-offs). **NEXT: cabinet view + board/checker skins +
+   TABLETOP registration** (CAB-11) — not wired into `games/__init__.py`/`main.py` yet.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
