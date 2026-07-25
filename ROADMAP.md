@@ -67,6 +67,15 @@ Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
   others watch it in the Replay Theater.
 - **Speedrun category** — Mari0-style portal platformer, a racer, a top-down; replays double as
   speedrun submissions; wants a tamper-resistance mark on replays.
+- ✅ **CAB-13 done** — replay HMAC tamper mark: `meta/replay.py` gained `sign_replay`/
+  `verify_replay` (stdlib `hmac`/`hashlib`, canonical sorted-key JSON minus `"sig"`),
+  `save_last`/`keep` now sign with the cabinet's `CABINET_MAN_API_KEY` (or a per-profile
+  `settings["replay_key"]` generated once) when no explicit key is passed, and `load()` returns
+  the replay dict with an added `verified` bool — unsigned/old replays still load, just
+  unverified (no back-compat break). Canonicalization is stdlib-only so `server/` can reuse it
+  later for CAB-14 (server-side re-verification) without a new dependency. Tests in
+  `tools/test_meta.py` (`replay_sign_verify_roundtrip`, `replay_tamper_detection`,
+  `replay_unsigned_legacy_loads_unverified`, `replay_canonicalization_stable_across_key_order`).
 
 ## Conventions (short)
 - **Add a game** = one folder `games/<id>/` exposing `INFO` (`arcade.game_api.GameInfo`),

@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from games.voxelhell import ACHIEVEMENTS, skin_for_achievement  # noqa: E402
 from games.voxelhell.world import World  # noqa: E402
 from meta import profile as profile_mod  # noqa: E402
+from meta import replay as replay_mod  # noqa: E402
 from meta.achievements import AchievementEngine  # noqa: E402
 from meta.stats import StatsTracker  # noqa: E402
 from tools.test_world import dodge_bot_input, DT  # noqa: E402
@@ -113,8 +114,117 @@ def migration_v1():
     print("v1 -> v2 migration OK")
 
 
+# --------------------------------------------------- CAB-13: replay HMAC mark
+def _sample_replay_data():
+    """A small, realistic replay payload (as ReplayRecorder.build() produces)
+    to exercise sign/verify against."""
+    rec = replay_mod.ReplayRecorder("voxelhell", "campaign", 4242, analog=False)
+    for i in range(5):
+        rec.on_frame(1 / 60, InputStateStub(left=(i % 2 == 0), fire=True))
+    return rec.build(score=1500)
+
+
+class InputStateStub:
+    def __init__(self, left=False, right=False, up=False, down=False,
+                 focus=False, fire=False):
+        self.left, self.right = left, right
+        self.up, self.down = up, down
+        self.focus, self.fire = focus, fire
+        self.aim_x = self.aim_y = self.strafe = self.turn = self.look_dx = 0.0
+
+
+def replay_sign_verify_roundtrip():
+    data = _sample_replay_data()
+    key = b"a-cabinet-signing-key"
+    data["sig"] = replay_mod.sign_replay(data, key)
+    assert replay_mod.verify_replay(data, key), "freshly signed replay must verify"
+    print("replay sign->verify round-trip OK")
+
+
+def replay_tamper_detection():
+    """Mutating any single recorded field (seed, one mask, one dt) after
+    signing must flip verification to False."""
+    key = b"a-cabinet-signing-key"
+
+    def signed():
+        d = _sample_replay_data()
+        d["sig"] = replay_mod.sign_replay(d, key)
+        return d
+
+    base = signed()
+    assert replay_mod.verify_replay(base, key)
+
+    tampered_seed = dict(base)
+    tampered_seed["seed"] = base["seed"] + 1
+    assert not replay_mod.verify_replay(tampered_seed, key), \
+        "seed mutation must invalidate signature"
+
+    tampered_mask = dict(base)
+    tampered_mask["masks"] = list(base["masks"])
+    tampered_mask["masks"][0] = (tampered_mask["masks"][0] ^ 1) & 0x3F
+    assert not replay_mod.verify_replay(tampered_mask, key), \
+        "single mask mutation must invalidate signature"
+
+    tampered_dt = dict(base)
+    tampered_dt["dts"] = list(base["dts"])
+    tampered_dt["dts"][0] = tampered_dt["dts"][0] + 0.5
+    assert not replay_mod.verify_replay(tampered_dt, key), \
+        "single dt mutation must invalidate signature"
+
+    # a wrong key must also fail, even against an otherwise-untouched payload
+    assert not replay_mod.verify_replay(base, b"a-different-key")
+
+    print("replay tamper detection OK (seed/mask/dt/wrong-key all rejected)")
+
+
+def replay_unsigned_legacy_loads_unverified():
+    """An old replay file saved before HMAC signing existed (no "sig" field)
+    must still load and play back — just flagged unverified, never refused."""
+    legacy = _sample_replay_data()
+    assert "sig" not in legacy
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "legacy.json")
+        replay_mod._atomic_write(path, legacy)
+        # pass an explicit key so this test never touches the real profile.json
+        loaded = replay_mod.load(path, key=b"whatever-local-key")
+    assert loaded["verified"] is False
+    assert loaded["seed"] == legacy["seed"]
+    assert loaded["masks"] == legacy["masks"]
+    # and it still reconstructs fine via the Replay class
+    rep = replay_mod.Replay(loaded)
+    assert rep.frame_count == legacy["dts"].__len__()
+    print("unsigned legacy replay loads with verified=False OK")
+
+
+def replay_canonicalization_stable_across_key_order():
+    """The canonical JSON used for the HMAC must be stable regardless of the
+    dict's insertion/key order (json.dumps(..., sort_keys=True) normalizes
+    this) — so signatures produced from re-ordered-but-equal payloads match."""
+    data = _sample_replay_data()
+    reordered = dict(reversed(list(data.items())))
+    assert list(data.items()) != list(reordered.items()), \
+        "test setup bug: reordering did not actually change insertion order"
+    assert data == reordered  # same content, different key order
+
+    key = b"order-shouldnt-matter"
+    sig_a = replay_mod.sign_replay(data, key)
+    sig_b = replay_mod.sign_replay(reordered, key)
+    assert sig_a == sig_b, "signature must not depend on dict key order"
+
+    # verifying a signed-then-reordered copy also succeeds
+    signed = dict(data)
+    signed["sig"] = sig_a
+    signed_reordered = dict(reversed(list(signed.items())))
+    assert replay_mod.verify_replay(signed_reordered, key)
+    print("replay canonicalization stable across key order OK")
+
+
 if __name__ == "__main__":
     migration_v1()
     p = run_campaign_with_meta()
     round_trip(p)
+    replay_sign_verify_roundtrip()
+    replay_tamper_detection()
+    replay_unsigned_legacy_loads_unverified()
+    replay_canonicalization_stable_across_key_order()
     print("ALL META TESTS PASSED")
