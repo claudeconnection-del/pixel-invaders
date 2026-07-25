@@ -3,13 +3,19 @@
 WAL mode, single file, safe under uvicorn's default worker. The DB path
 comes from ARCADE_DB_PATH (docker-compose mounts a volume at /data).
 """
+import base64
 import json
 import os
 import sqlite3
 import threading
+import zlib
 from datetime import datetime, timezone
 
 DB_PATH = os.environ.get("ARCADE_DB_PATH", "./arcade.db")
+
+# CAB-14: replays are kept only for score entries that are on, or beat, the
+# current top-N of their (game, mode) board.
+RETENTION_TOP_N = 10
 
 _lock = threading.Lock()
 _conn = None
@@ -80,6 +86,26 @@ def connection():
                 PRIMARY KEY (code, name)
             )
         """)
+        # CAB-14: replays tied to leaderboard entries. The replay payload
+        # (the CAB-13 signed dict, including its "sig") is stored zlib
+        # compressed + base64-encoded in `blob`; (game, mode, name, score)
+        # are denormalized copies of the matching scores row so listing and
+        # retention pruning never need to inflate the blob.
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS replays (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                name TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                blob TEXT NOT NULL,
+                created TEXT NOT NULL
+            )
+        """)
+        _conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_replays_board
+            ON replays (game, mode, score DESC)
+        """)
         _conn.commit()
     return _conn
 
@@ -99,7 +125,32 @@ def insert_score(game, mode, name, score, wave=None):
             "SELECT COUNT(*) + 1 FROM scores "
             "WHERE game = ? AND mode = ? AND (score > ? OR (score = ? AND id < ?))",
             (game, mode, score, score, row_id)).fetchone()
+        # a new score can bump an older one off the top-N, taking its stored
+        # replay (if any) with it — CAB-14 retention.
+        _prune_replays(conn, game, mode)
+        conn.commit()
     return row_id, rank
+
+
+def score_rank(game, mode, name, score):
+    """1-based rank of an existing scores row matching (game, mode, name,
+    score) — ties broken the same way as insert_score (most recent id wins
+    the tie for "found row", but rank itself only depends on score value).
+    Returns None if no such row exists."""
+    with _lock:
+        conn = connection()
+        row = conn.execute(
+            "SELECT id FROM scores WHERE game = ? AND mode = ? AND name = ? "
+            "AND score = ? ORDER BY id DESC LIMIT 1",
+            (game, mode, name, score)).fetchone()
+        if row is None:
+            return None
+        row_id = row[0]
+        (rank,) = conn.execute(
+            "SELECT COUNT(*) + 1 FROM scores "
+            "WHERE game = ? AND mode = ? AND (score > ? OR (score = ? AND id < ?))",
+            (game, mode, score, score, row_id)).fetchone()
+    return rank
 
 
 def top_scores(game, mode, limit=10):
@@ -336,11 +387,87 @@ def submit_move(code, name, base_version, state, turn):
         return "ok", _match_row(conn, code)
 
 
+# -------------------------------------------------------------- replays
+def _pack_replay(replay):
+    """zlib-compress + base64-encode a replay dict's canonical JSON so it
+    stores compactly as sqlite TEXT (stdlib only)."""
+    raw = json.dumps(replay, separators=(",", ":")).encode("utf-8")
+    return base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
+
+
+def _unpack_replay(blob):
+    raw = zlib.decompress(base64.b64decode(blob))
+    return json.loads(raw)
+
+
+def _prune_replays(conn, game, mode):
+    """Delete any stored replay for (game, mode) whose score no longer
+    qualifies for the current top-N of that board. Called after every score
+    insert (a new high score can bump an older one, and its replay, off the
+    board) and after every replay insert (belt-and-braces)."""
+    (count,) = conn.execute(
+        "SELECT COUNT(*) FROM scores WHERE game = ? AND mode = ?",
+        (game, mode)).fetchone()
+    if count < RETENTION_TOP_N:
+        return
+    row = conn.execute(
+        "SELECT score FROM scores WHERE game = ? AND mode = ? "
+        "ORDER BY score DESC, id ASC LIMIT 1 OFFSET ?",
+        (game, mode, RETENTION_TOP_N - 1)).fetchone()
+    if row is None:
+        return
+    threshold = row[0]
+    conn.execute(
+        "DELETE FROM replays WHERE game = ? AND mode = ? AND score < ?",
+        (game, mode, threshold))
+
+
+def insert_replay(game, mode, name, score, replay):
+    """Store a verified replay tied to a (game, mode, name, score) entry.
+    Returns the new replay's id."""
+    created = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    blob = _pack_replay(replay)
+    with _lock:
+        conn = connection()
+        cur = conn.execute(
+            "INSERT INTO replays (game, mode, name, score, blob, created) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (game, mode, name, score, blob, created))
+        row_id = cur.lastrowid
+        _prune_replays(conn, game, mode)
+        conn.commit()
+    return row_id
+
+
+def list_replays(game, mode):
+    """Available replays for a board, best score first."""
+    with _lock:
+        rows = connection().execute(
+            "SELECT id, name, score, created FROM replays "
+            "WHERE game = ? AND mode = ? ORDER BY score DESC, id ASC",
+            (game, mode)).fetchall()
+    return [
+        {"id": rid, "name": name, "score": score, "date": created[:10]}
+        for rid, name, score, created in rows
+    ]
+
+
+def get_replay(replay_id):
+    """The stored replay dict for `replay_id`, or None if it doesn't exist
+    (never existed, or was pruned by retention)."""
+    with _lock:
+        row = connection().execute(
+            "SELECT blob FROM replays WHERE id = ?", (replay_id,)).fetchone()
+    if row is None:
+        return None
+    return _unpack_replay(row[0])
+
+
 def reset_for_tests():
     """Testing hook: wipe all tables (used with a temp ARCADE_DB_PATH)."""
     with _lock:
         conn = connection()
         for t in ("scores", "sessions", "session_players",
-                  "matches", "match_players"):
+                  "matches", "match_players", "replays"):
             conn.execute(f"DELETE FROM {t}")
         conn.commit()

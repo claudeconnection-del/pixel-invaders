@@ -97,8 +97,24 @@ Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
 
 ### 🗺️ Later (roadmap order)
-- **Share/post replays to the leaderboard** — upload a run's replay tied to its high-score entry;
-  others watch it in the Replay Theater.
+- ✅ **CAB-14 done** — server: replay upload/fetch endpoints tied to leaderboard entries.
+  `server/db.py` gained a `replays` table (blob = zlib + base64 of the CAB-13 signed replay
+  dict, stdlib only) plus `score_rank`/`insert_replay`/`list_replays`/`get_replay`/
+  `_prune_replays`; `server/app.py` adds `POST /replays`, `GET /replays?game=&mode=`,
+  `GET /replays/<id>`. Uploads are HMAC-verified against the shared `ARCADE_API_KEY` (mirrors
+  `meta/replay.py`'s canonical-JSON `_canonical_json`/`verify_replay` rather than importing
+  it — the Dockerfile only `COPY`s `server/` into the image, so a cross-package import would
+  break the running container even though it works fine in the full checkout/tests), capped at
+  256 KB canonical JSON, and kept only for entries on/beating the current top-10 per
+  `(game, mode)` — `insert_score` now prunes replays that fall off the board on every new
+  submission. Score-row matching uses the simpler of the two options the ticket allowed:
+  match on `(game, mode, name, score)` rather than round-tripping the score row id, since the
+  CAB-13 replay payload carries no player name and scoreboard.py's storage is flat/id-less to
+  clients anyway. `server/test_server.py` covers upload→list→fetch, bad signature, oversize,
+  retention pruning, api-key requirement, and old-score-submit-path regression — all green.
+- **Share/post replays to the leaderboard (client-side)** — the in-game Replay Theater/UI to
+  actually call the new endpoints (browse others' uploaded replays, upload your own after a
+  run) is still open; CAB-14 only lands the server half.
 - **Speedrun category** — Mari0-style portal platformer, a racer, a top-down; replays double as
   speedrun submissions; wants a tamper-resistance mark on replays.
 - ✅ **CAB-13 done** — replay HMAC tamper mark: `meta/replay.py` gained `sign_replay`/
