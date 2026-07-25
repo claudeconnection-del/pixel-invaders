@@ -59,8 +59,14 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
 1. **Rummy lay-offs** onto the knocker's melds (CAB-6, deferred from the first Rummy pass).
-2. **Poker** — 5-card **video poker** (hold/draw + payouts) headless core (CAB-7, in progress in
-   an isolated lane), then table view (CAB-8) + achievements (CAB-9).
+2. **Poker** — ✅ **Video poker headless core done** (CAB-7): `games/poker/model.py` (+
+   `games/poker/__init__.py`) — `evaluate()` hand classifier (royal_flush .. nothing, ace
+   high/low incl. the wheel straight), full-pay 9/6 Jacks-or-Better `PAYTABLE` with the
+   max-bet (5-coin) royal jackpot (4000, not 250×5), `VideoPoker` (bet/deal/toggle_hold/draw,
+   credits ledger), deterministic from the rng. `tools/test_poker.py` green (evaluator
+   truth-table, payout math, deal/draw determinism, credits ledger, 10k-hand rng sweep RTP
+   smoke-check). **NEXT: cabinet view** `games/poker/game.py` (hold/draw table, register
+   TABLETOP, CAB-8), then achievements (CAB-9).
 3. **Backgammon** — 24 points + dice, pip-count greedy AI (CAB-10, in progress in an isolated
    lane), then table view (CAB-11) + board/checker skins (CAB-12).
 
