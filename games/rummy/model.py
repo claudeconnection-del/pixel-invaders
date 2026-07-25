@@ -2,8 +2,9 @@
 a seed. Two players (the human vs a simple AI, wired later). Standard Gin:
 deal 10 each, draw from stock or discard then discard one; form melds (sets of
 3-4 same rank, runs of 3+ in suit, Ace low); knock when your deadwood <= 10, or
-gin at 0. (Lay-offs onto the knocker's melds are intentionally omitted in this
-first version — noted for a later pass.)
+gin at 0. After a non-gin knock, the defender lays off deadwood cards onto the
+knocker's melds (`apply_layoffs`) before deadwood is scored — no lay-offs
+against gin.
 
 The meld engine (`best_deadwood`) finds the arrangement of non-overlapping melds
 that minimises leftover "deadwood" value — the heart of Rummy, shared by the AI
@@ -95,6 +96,55 @@ def deadwood(cards):
     return best_deadwood(cards)[0]
 
 
+def apply_layoffs(defender_cards, knocker_melds):
+    """Lay off as many of the defender's deadwood cards as possible onto the
+    knocker's melds (runs extend at either end; a 3-card set takes its 4th
+    card), chaining extensions to a fixpoint (e.g. laying off 9H onto 6-7-8H
+    then 10H onto the new 6-7-8-9H run). `defender_cards` should be the loose
+    deadwood left by the defender's own `best_deadwood` split — never call
+    this after a gin knock. Returns (laid_off_cards, remaining_deadwood_value)."""
+    remaining = list(defender_cards)
+    melds = [list(m) for m in knocker_melds]
+    laid_off = []
+    changed = True
+    while changed:
+        changed = False
+        for meld in melds:
+            ranks = {c.rank for c in meld}
+            if len(ranks) == 1:                    # a set
+                if len(meld) == 3:
+                    rank = next(iter(ranks))
+                    used_suits = {c.suit for c in meld}
+                    for c in remaining:
+                        if c.rank == rank and c.suit not in used_suits:
+                            meld.append(c)
+                            remaining.remove(c)
+                            laid_off.append(c)
+                            changed = True
+                            break
+            else:                                   # a run
+                meld.sort(key=lambda c: c.rank)
+                suit = meld[0].suit
+                low, high = meld[0].rank, meld[-1].rank
+                for c in remaining:
+                    if c.suit == suit and c.rank == low - 1:
+                        meld.insert(0, c)
+                        remaining.remove(c)
+                        laid_off.append(c)
+                        changed = True
+                        break
+                else:
+                    for c in remaining:
+                        if c.suit == suit and c.rank == high + 1:
+                            meld.append(c)
+                            remaining.remove(c)
+                            laid_off.append(c)
+                            changed = True
+                            break
+    remaining_value = sum(deadwood_value(c.rank) for c in remaining)
+    return laid_off, remaining_value
+
+
 class GinRummy:
     def __init__(self, rng=None, target=100):
         self.rng = rng
@@ -173,17 +223,23 @@ class GinRummy:
         k_dead, k_melds = best_deadwood(self.hands[knocker])
         o_dead, o_melds = best_deadwood(self.hands[opp])
         gin = k_dead == 0
+        layoffs = []
+        if not gin:
+            melded = {c for m in o_melds for c in m}
+            loose = [c for c in self.hands[opp] if c not in melded]
+            layoffs, o_dead = apply_layoffs(loose, k_melds)
         if gin:
             winner, points = knocker, o_dead + GIN_BONUS
         elif o_dead > k_dead:
             winner, points = knocker, o_dead - k_dead
-        else:                              # undercut
+        else:                              # undercut (post-layoff deadwood)
             winner, points = opp, (k_dead - o_dead) + UNDERCUT_BONUS
         self.scores[winner] += points
         self.result = {
             "knocker": knocker, "winner": winner, "points": points, "gin": gin,
             "deadwood": {knocker: k_dead, opp: o_dead},
             "melds": {knocker: k_melds, opp: o_melds},
+            "layoffs": layoffs,
         }
         self.hand_over = True
         if self.scores[winner] >= self.target:

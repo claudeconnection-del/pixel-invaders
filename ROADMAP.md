@@ -25,7 +25,7 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
 .venv/Scripts/python.exe tools/test_meta.py tools/test_games.py tools/test_world.py tools/test_render.py
 ```
 
-## Status — 2026-07-14
+## Status — 2026-07-25
 
 ### ✅ Done (on this branch)
 - **Rename** Pixel Invaders → **Cabinet Man** (Emberlight stays the *look*). Client env vars
@@ -75,7 +75,16 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   integration (CAB-36).**
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
-1. **Rummy lay-offs** onto the knocker's melds (CAB-6, deferred from the first Rummy pass).
+1. ✅ **Rummy lay-offs onto the knocker's melds (CAB-6).** `apply_layoffs(defender_cards,
+   knocker_melds)` in `games/rummy/model.py` — greedy-to-fixpoint: run melds extend at
+   either end (chained, e.g. laying off 9H onto 6-7-8H then 10H onto the new run), 3-card
+   sets take their 4th card; only ever offered the defender's own loose deadwood (the
+   `best_deadwood` leftovers), never called on a gin knock. `_end_hand` recomputes the
+   defender's post-layoff deadwood for both the win/undercut comparison and the score,
+   and records `result["layoffs"]`. `games/rummy/game.py` `_draw_result` shows a
+   "laid off N card(s)" line when present. Tests in `tools/test_rummy.py`: run extension,
+   set 4th-card, chained extension, no-layoff-on-gin, an undercut created only by a
+   layoff. **Rummy is now feature-complete** (achievements/cosmetics from CAB-5 + this).
 2. **Poker** — ✅ **Video poker headless core done** (CAB-7): `games/poker/model.py` (+
    `games/poker/__init__.py`) — `evaluate()` hand classifier (royal_flush .. nothing, ace
    high/low incl. the wheel straight), full-pay 9/6 Jacks-or-Better `PAYTABLE` with the

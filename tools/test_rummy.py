@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from games.cards.deck import Card  # noqa: E402
 from games.rummy.model import (  # noqa: E402
-    GinRummy, all_melds, best_deadwood, deadwood)
+    GinRummy, all_melds, apply_layoffs, best_deadwood, deadwood, deadwood_value)
 from games.rummy.ai import ai_turn  # noqa: E402
 
 
@@ -51,6 +51,81 @@ def test_scoring():
     assert m.result["gin"] and m.result["winner"] == "P1"
     assert m.scores["P1"] == 18 + 25
     print("scoring OK (gin + bonus)")
+
+
+def test_layoffs_run_extension():
+    knocker_run = [Card(6, "H"), Card(7, "H"), Card(8, "H")]
+    loose = [Card(9, "H"), Card(2, "C")]
+    laid_off, remaining = apply_layoffs(loose, [knocker_run])
+    assert laid_off == [Card(9, "H")]
+    assert remaining == deadwood_value(2)
+    print("layoff run extension OK")
+
+
+def test_layoffs_set_fourth():
+    knocker_set = [Card(7, "S"), Card(7, "H"), Card(7, "D")]
+    loose = [Card(7, "C"), Card(5, "S")]
+    laid_off, remaining = apply_layoffs(loose, [knocker_set])
+    assert laid_off == [Card(7, "C")]
+    assert remaining == deadwood_value(5)
+    print("layoff set 4th-card OK")
+
+
+def test_layoffs_chained_extension():
+    knocker_run = [Card(6, "H"), Card(7, "H"), Card(8, "H")]
+    # neither card alone is adjacent to the run's far end order-independent —
+    # the fixpoint loop must chain 9H then 10H (or vice versa) to place both.
+    loose = [Card(10, "H"), Card(9, "H")]
+    laid_off, remaining = apply_layoffs(loose, [knocker_run])
+    assert set(laid_off) == {Card(9, "H"), Card(10, "H")}
+    assert remaining == 0
+    print("layoff chained extension OK")
+
+
+def test_no_layoff_on_gin():
+    m = GinRummy(target=100)
+    m.hands["P1"] = [Card(3, "H"), Card(4, "H"), Card(5, "H"), Card(6, "H"),
+                     Card(7, "S"), Card(7, "H"), Card(7, "D"),
+                     Card(9, "C"), Card(10, "C"), Card(11, "C")]
+    # 7C would complete P1's 7-set if laid off — must NOT happen on a gin knock
+    m.hands["P2"] = [Card(7, "C"), Card(2, "D"), Card(9, "D"), Card(13, "D"),
+                     Card(4, "S"), Card(11, "S"), Card(1, "H"), Card(8, "H"),
+                     Card(12, "H"), Card(6, "D")]
+    raw_o_dead = deadwood(m.hands["P2"])
+    assert raw_o_dead == 67
+    m._end_hand("P1")
+    assert m.result["gin"] is True
+    assert m.result["layoffs"] == []
+    assert m.result["deadwood"]["P2"] == raw_o_dead
+    assert m.scores["P1"] == raw_o_dead + 25
+    print("no layoff on gin OK")
+
+
+def test_undercut_from_layoff():
+    m = GinRummy(target=100)
+    # P1 (knocker): a set + two 3-card runs, one loose king -> deadwood 10
+    # (a loose ace would have joined the club run into a gin hand instead).
+    m.hands["P1"] = [Card(8, "H"), Card(8, "D"), Card(8, "S"),
+                     Card(2, "C"), Card(3, "C"), Card(4, "C"),
+                     Card(10, "D"), Card(11, "D"), Card(12, "D"),
+                     Card(13, "S")]
+    # P2 (defender): a fully-melded 7 cards + exactly the 3 cards that lay
+    # off onto P1's melds (5C extends the club run, 13D extends the diamond
+    # run, 8C completes the 8s) — raw deadwood is high, post-layoff is 0.
+    m.hands["P2"] = [Card(2, "H"), Card(3, "H"), Card(4, "H"), Card(5, "H"),
+                     Card(9, "S"), Card(10, "S"), Card(11, "S"),
+                     Card(5, "C"), Card(8, "C"), Card(13, "D")]
+    raw_o_dead = deadwood(m.hands["P2"])
+    assert raw_o_dead == deadwood_value(5) + deadwood_value(8) + deadwood_value(13)
+    m._end_hand("P1")
+    assert set(m.result["layoffs"]) == {Card(5, "C"), Card(8, "C"), Card(13, "D")}
+    assert m.result["deadwood"]["P2"] == 0
+    # without the layoff P1 would win (23 > 10); the layoff flips it to an
+    # undercut in P2's favor — this is the case the rule exists for.
+    assert m.result["winner"] == "P2"
+    assert m.result["points"] == 35             # (10 - 0) + UNDERCUT_BONUS(25)
+    assert m.scores["P2"] == 35
+    print("undercut created only by a layoff OK")
 
 
 def _play_to_completion(seed, target=25):
@@ -140,6 +215,11 @@ def test_rummy_wiring():
 def main():
     test_meld_engine()
     test_scoring()
+    test_layoffs_run_extension()
+    test_layoffs_set_fourth()
+    test_layoffs_chained_extension()
+    test_no_layoff_on_gin()
+    test_undercut_from_layoff()
     test_ai_game()
     test_rummy_achievements()
     test_rummy_wiring()

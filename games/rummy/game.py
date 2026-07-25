@@ -386,6 +386,10 @@ class GinRummyRun(GameRun):
             o.text(f"+{r.get('points', 0)}   ·   YOU {m.scores[HUMAN]}  "
                    f"HOUSE {m.scores[HOUSE]}", W / 2, H / 2 + 26, size=20,
                    color=TEXT, center=True)
+            n_layoffs = len(r.get("layoffs") or [])
+            if n_layoffs:
+                o.text(f"laid off {n_layoffs} card{'s' if n_layoffs != 1 else ''}",
+                       W / 2, H / 2 + 54, size=14, color=DIM, center=True)
             o.text("N: next hand", W / 2, H / 2 + 74, size=18, color=EMBER,
                    center=True)
 
