@@ -87,6 +87,10 @@ Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
   later for CAB-14 (server-side re-verification) without a new dependency. Tests in
   `tools/test_meta.py` (`replay_sign_verify_roundtrip`, `replay_tamper_detection`,
   `replay_unsigned_legacy_loads_unverified`, `replay_canonicalization_stable_across_key_order`).
+  Spec + plan drafted (CAB-17): `docs/superpowers/specs/2026-07-25-speedrun-category-design.md` ·
+  `docs/superpowers/plans/2026-07-25-speedrun-category.md` — flagship is the portal platformer
+  (working title "Riftrunner"), any% only for v1, replay-as-submission signed per CAB-13.
+  **Awaiting owner approval before implementation starts.**
 
 ## Conventions (short)
 - **Add a game** = one folder `games/<id>/` exposing `INFO` (`arcade.game_api.GameInfo`),
