@@ -20,6 +20,7 @@ from games.cards import table
 from games.cards.deck import SUITS
 from games.solitaire.achievements import ACHIEVEMENTS as _SOL_ACHIEVEMENTS
 from games.solitaire.model import Solitaire
+from games.solitaire.pilot import create_pilot  # noqa: F401 — cabinet opt-in
 
 INFO = GameInfo(
     "solitaire", "SOLITAIRE",

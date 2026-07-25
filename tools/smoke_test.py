@@ -456,6 +456,36 @@ def main():
     print(f"gin rummy OK (hand_over={rr.model.hand_over}, "
           f"scores={rr.model.scores})")
 
+    # Cabinet Man: F1 summons the house pilot on an opted-in game (Solitaire),
+    # it plays a few moves on its own, then any real input instantly hands
+    # back the seat — exercising summon -> pilot moves -> handback live.
+    from games.cards.deck import Card as _Card
+    app.game_id = "solitaire"
+    app.state = game_main.MENU
+    app.start_run("draw1")
+    assert app.pilot is None and app.state == game_main.PLAYING
+    cm = app.run
+    full = lambda s: [_Card(r, s) for r in range(1, 14)]
+    cm.model.foundations = {"S": full("S"), "H": full("H"), "D": full("D"),
+                            "C": [_Card(r, "C") for r in range(1, 13)]}
+    cm.model.tableau = [{"down": [], "up": [_Card(13, "C")]}] + \
+                       [{"down": [], "up": []} for _ in range(6)]
+    cm.model.stock, cm.model.waste = [], []
+    cm.won_flag = False
+    app.handle_keydown(pygame.K_F1)             # summon
+    assert app.pilot is not None and app.wave_banner is not None
+    app.gameplay_input = lambda: InputState()   # hands off the controls
+    for _ in range(8):                          # the pilot plays on its own
+        app.update_playing(dt)
+        render_frame()                          # exercises the pulsing badge
+        if cm.model.won:
+            break
+    assert cm.pilot_touched                      # the run is flagged
+    pilot_won = cm.model.won
+    app.handle_keydown(pygame.K_n)               # a real key: instant handback
+    assert app.pilot is None
+    print(f"cabinet man OK (pilot won={pilot_won}, pilot_touched={cm.pilot_touched})")
+
     pygame.quit()
     print("SMOKE TEST PASSED")
 

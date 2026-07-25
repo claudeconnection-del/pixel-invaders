@@ -29,6 +29,7 @@ from game.theme import (
 )
 from game.entities import InputState
 from game.netclient import ArcadeClient
+from arcade.pilot import create_pilot_for, suppress_for_pilot
 from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
                    load_games)
 from meta import ghost as ghost_mod
@@ -188,6 +189,9 @@ class App:
         self.wave_banner = None   # (text, timer)
         self.showcase_index = 0
 
+        # Cabinet Man: the summonable house player (F1 while PLAYING)
+        self.pilot = None
+
         # arcade presentation
         self.idle_timer = 0.0
         self.attract_index = -1
@@ -271,6 +275,42 @@ class App:
         module = self.game
         resolver = getattr(module, "skin_for_achievement", None)
         return AchievementEngine(self.section, module.ACHIEVEMENTS, resolver)
+
+    # -------------------------------------------------------- Cabinet Man
+    def _toggle_pilot(self):
+        """F1 while PLAYING: summon Cabinet Man, or hand back if already at
+        the controls."""
+        if self.pilot is not None:
+            self._handback_pilot()
+            return
+        self.pilot = create_pilot_for(self.game, self.run)
+        if self.pilot is None:
+            return          # this game hasn't opted in — no-op
+        self.post_banner("CABINET MAN AT THE CONTROLS", 2.0)
+        self.audio.play("menu_select")
+
+    def _handback_pilot(self):
+        if self.pilot is None:
+            return
+        self.pilot = None
+        self.post_banner("…all yours", 1.5)
+
+    @staticmethod
+    def _pilot_real_input(inp):
+        """True if the human is actually touching the controls this frame —
+        any of these firing while Cabinet Man is active hands the seat back
+        instantly (mirrors the raw-keydown handback in handle_keydown)."""
+        return (inp.left or inp.right or inp.up or inp.down or inp.fire
+                or inp.focus or inp.strafe != 0 or inp.turn != 0
+                or inp.look_dx != 0)
+
+    def _draw_pilot_badge(self, o):
+        if self.pilot is None:
+            return
+        pulse = int(180 + 60 * abs(math.sin(self.renderer.time * 3)))
+        label = f"◈ {self.pilot.label.upper()} AT THE CONTROLS"
+        w = o.text_width(label, size=16)
+        o.text(label, self.W - w - 20, 20, size=16, color=(255, 200, 60, pulse))
 
     # ------------------------------------------------------------- display
     def apply_display_settings(self):
@@ -589,8 +629,13 @@ class App:
             if key == pygame.K_ESCAPE:
                 self.state = PAUSED
                 self.audio.music(None)
-            elif hasattr(self.run, "handle_key"):
-                self.run.handle_key(key)
+            elif key == pygame.K_F1:
+                self._toggle_pilot()
+            else:
+                if self.pilot is not None:
+                    self._handback_pilot()
+                if hasattr(self.run, "handle_key"):
+                    self.run.handle_key(key)
 
         elif self.state == PAUSED:
             if key == pygame.K_ESCAPE:
@@ -714,6 +759,7 @@ class App:
             seed = random.randrange(2 ** 31)
         self.run_seed = seed
         self.run = self.game.create_run(mode, random.Random(seed))
+        self.run.pilot_touched = False   # Cabinet Man hasn't driven this run
         if hasattr(self.run, "attach_profile"):
             self.run.attach_profile(self.section, self.profile["settings"],
                                     self.save_profile)
@@ -722,6 +768,7 @@ class App:
         self.run_engine = self.engine_for_current_game()
         self.run_summary = None
         self.pending_board = None
+        self.pilot = None
         self.toasts.clear()
         self.wave_banner = None
         self.state = PLAYING
@@ -1214,6 +1261,7 @@ class App:
         if self.run is not None and hasattr(self.run, "close"):
             self.run.close()   # let a run release resources (e.g. board host server)
         self.run = None
+        self.pilot = None
         self.save_profile()
         self.state = LOBBY if self.mp is not None else MENU
         self.audio.music("menu")
@@ -1341,6 +1389,14 @@ class App:
     def update_playing(self, dt):
         run = self.run
         inp = self.gameplay_input()
+        if self.pilot is not None:
+            if self._pilot_real_input(inp):
+                self._handback_pilot()
+            else:
+                pilot_inp = self.pilot.step(run, dt)
+                if pilot_inp is not None:
+                    inp = pilot_inp
+                run.pilot_touched = True
         run.update(dt, inp)
         self.run_elapsed += dt
         if self.replay_rec is not None:
@@ -1369,10 +1425,13 @@ class App:
                 self.run_won = data["win"]
 
         self.run_stats_tracker.on_frame(dt, frame_events)
-        for achievement in self.run_engine.on_frame(frame_events, run.run_stats()):
-            self.toasts.append([achievement, 3.5])
-            self.audio.play("toast")
-            self.save_profile()
+        # Cabinet Man is a showman, not a booster: no achievement unlocks from
+        # any run a pilot has driven any part of.
+        if not suppress_for_pilot(run):
+            for achievement in self.run_engine.on_frame(frame_events, run.run_stats()):
+                self.toasts.append([achievement, 3.5])
+                self.audio.play("toast")
+                self.save_profile()
 
         if hasattr(run, "per_frame_particles"):
             run.per_frame_particles(self.renderer, random)
@@ -1389,11 +1448,19 @@ class App:
                 ghost = self.ghost_rec.build(self.game_id, self.run_mode, score)
                 if ghost_mod.maybe_store_best(self.ghosts, ghost):
                     self.post_banner("NEW GHOST SAVED", 2.0)
+            pilot_touched = suppress_for_pilot(run)
             if self.replay_rec is not None and self.replay_rec.frame_count:
                 self.last_replay = self.replay_rec.build(score)
+                if pilot_touched:
+                    self.last_replay["pilot"] = True
                 replay_mod.save_last(self.last_replay)
             self.export_status = ""
-            if self.mp is not None:
+            # Score integrity: a pilot-driven run still plays and records a
+            # local replay (marked above), but never submits a high score —
+            # showmanship, not a shortcut to the leaderboard.
+            if pilot_touched:
+                pass
+            elif self.mp is not None:
                 # session runs report to the lobby, not the initials flow;
                 # queued so a dropped connection still lands the score
                 self.outbox.queue_session_score(
@@ -2025,6 +2092,7 @@ class App:
             self.run.draw_hud(o, hud_w, self.H, self.section)
             o.offset_x = 0.0
             self.draw_ghost_pace(o)
+            self._draw_pilot_badge(o)
             self.draw_banner_and_toasts()
             if self.state == PAUSED:
                 self.draw_paused()

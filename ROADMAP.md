@@ -56,6 +56,23 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   `first_gin`) + felt `speakeasy` (unlocks on `game_win`). Extracted the shared cosmetic-unlock
   sync out of Solitaire into `games/cards/table.py:sync_unlocks(section, settings, save_cb)`,
   called per-frame by both Solitaire and Rummy (Solitaire's behavior unchanged).
+- **Cabinet Man framework + Solitaire reference pilot (CAB-32, Epic E1).** ✅ `arcade/pilot.py`
+  (`create_pilot_for(module, run)`, `suppress_for_pilot(run)`); games opt in by exporting
+  `create_pilot(run)` from `games/<id>/game.py`. `games/solitaire/pilot.py`: an unorthodox
+  speed-solver — always wins a solvable board via the same auto-complete route as `SPACE`,
+  makes visible progress otherwise (alternates which end of the tableau it scans, occasional
+  legal-but-pointless tableau shuffle for personality), ~90ms cadence seeded from the run's own
+  rng (deterministic, no wall-clock randomness); gives up gracefully if truly stuck (v1
+  limitation, documented). Cabinet wiring in `main.py`: `F1` summons/hands back while PLAYING
+  (banner + pulsing top-right HUD badge); the pilot steps before `run.update()` each frame,
+  overriding the human `InputState` when it returns one; **any** real input (key, click, pad,
+  or movement) instantly hands back with an "…all yours" toast. Score integrity:
+  `run.pilot_touched` flags any run Cabinet Man drove any part of — high-score submission is
+  skipped, the local replay is still recorded but marked `"pilot": true`, and achievement
+  unlocks are suppressed for that run. Tests in `tools/test_pilot.py`; `tools/smoke_test.py`
+  drives a live summon → pilot moves → handback on Solitaire. **NEXT (Epic E, owner's headline
+  interest): E2 Voxel Hell, E3 Serpent, E4 Breaker pilots (CAB-33/34/35), then E5 attract-mode
+  integration (CAB-36).**
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
 1. **Rummy lay-offs** onto the knocker's melds (CAB-6, deferred from the first Rummy pass).
