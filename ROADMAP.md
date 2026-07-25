@@ -56,7 +56,14 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
    K to knock, hand/game-over screens) — reuses `cards/table` felt+picker; registered in TABLETOP;
    smoke drives a hand to completion. **NEXT: Rummy achievements** (first_gin/first_win/grind), then
    Poker. (Lay-offs onto the knocker's melds deferred — noted in model.py.)
-2. **Poker** — 5-card **video poker** (hold/draw + payouts) first; heads-up vs-AI optional later.
+2. **Poker** — ✅ **Video poker headless core done** (CAB-7): `games/poker/model.py` (+
+   `games/poker/__init__.py`) — `evaluate()` hand classifier (royal_flush .. nothing, ace
+   high/low incl. the wheel straight), full-pay 9/6 Jacks-or-Better `PAYTABLE` with the
+   max-bet (5-coin) royal jackpot (4000, not 250×5), `VideoPoker` (bet/deal/toggle_hold/draw,
+   credits ledger), deterministic from the rng. `tools/test_poker.py` green (evaluator
+   truth-table, payout math, deal/draw determinism, credits ledger, 10k-hand rng sweep RTP
+   smoke-check). **NEXT: cabinet view** `games/poker/game.py` (hold/draw table, register
+   TABLETOP) — a later ticket (CAB-8); heads-up vs-AI optional after that.
 3. **Backgammon** — 24 points + dice, pip-count greedy AI; adds **board/checker skins**.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
