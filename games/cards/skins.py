@@ -101,6 +101,8 @@ DECKS = [
     DeckSkin("void", "Void", "pinstripe", [12, 12, 16], _rgb(theme.STEEL),
              _rgb(theme.GARNET), _rgb(theme.COBALT), back_bg=[8, 8, 12],
              premium="millennium"),
+    DeckSkin("juniper", "Juniper", "cross", _CREAM, [24, 32, 22], _RED,
+             _rgb(theme.FERN), back_bg=[20, 28, 20], premium="first_gin"),
 ]
 
 
@@ -174,6 +176,8 @@ FELTS = [
     FeltSkin("prism", "Prism", "scene:lattice",
              [_rgb(theme.IRIS), _rgb(theme.PETAL), _rgb(theme.FROST)],
              premium="streak_3"),
+    FeltSkin("speakeasy", "Speakeasy", "pattern:carbon",
+             [[30, 20, 14], _rgb(theme.HONEY)], premium="game_win"),
 ]
 
 

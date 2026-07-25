@@ -116,21 +116,7 @@ class SolitaireRun(GameRun):
     def _sync_unlocks(self):
         """Mirror any earned cosmetic-unlock achievements into the shared
         tabletop store so the tied premium deck/felt becomes selectable."""
-        if self.section is None or self.settings is None:
-            return
-        tt = table.tabletop_store(self.settings)
-        got = set(self.section.get("achievements", {}).keys())
-        changed = False
-        for d in skins.DECKS:
-            if d.premium in got and d.id not in tt["unlocked_decks"]:
-                tt["unlocked_decks"].append(d.id)
-                changed = True
-        for f in skins.FELTS:
-            if f.premium in got and f.id not in tt["unlocked_felts"]:
-                tt["unlocked_felts"].append(f.id)
-                changed = True
-        if changed:
-            self.save_cb()
+        table.sync_unlocks(self.section, self.settings, self.save_cb)
 
     def run_summary(self):
         return {"win": self.model.won}

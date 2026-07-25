@@ -16,6 +16,7 @@ from game.theme import TEXT, DIM, EMBER, GOLD, GOOD, DANGER, PANEL
 from games.cards import render as card_render
 from games.cards import skins
 from games.cards import table
+from games.rummy.achievements import ACHIEVEMENTS as _RUMMY_ACHIEVEMENTS
 from games.rummy.model import GinRummy, best_deadwood, deadwood, deadwood_value
 
 INFO = GameInfo(
@@ -25,7 +26,9 @@ INFO = GameInfo(
     modes=[("gin", "GIN RUMMY")],
     has_scores=False, attract=False, game_music=True, music_pool="menu",
 )
-ACHIEVEMENTS = []          # wired in a later increment
+ACHIEVEMENTS = _RUMMY_ACHIEVEMENTS
+_GRIND_KEYS = ("rm_hands", "rm_hand_wins", "rm_gins", "rm_undercuts",
+               "rm_game_wins", "rm_streak", "rm_best_streak")
 
 CARD_W, CARD_H = 90, 126
 FAN = 74                   # hand fan spacing
@@ -73,6 +76,17 @@ class GinRummyRun(GameRun):
         tt = table.tabletop_store(settings)
         self.deck = skins.deck_by_id(tt.get("deck", "classic"))
         self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
+        life = section["lifetime"]
+        for k in _GRIND_KEYS:
+            life.setdefault(k, 0)
+        life["rm_hands"] += 1           # this freshly-dealt hand counts as played
+        self._sync_unlocks()
+        self.save_cb()
+
+    def _sync_unlocks(self):
+        """Mirror any earned cosmetic-unlock achievements into the shared
+        tabletop store so the tied premium deck/felt becomes selectable."""
+        table.sync_unlocks(self.section, self.settings, self.save_cb)
 
     def _set_felt(self, felt):
         self.felt = felt
@@ -94,6 +108,7 @@ class GinRummyRun(GameRun):
     # --------------------------------------------------------------- update
     def update(self, dt, inp):
         self.time += dt
+        self._sync_unlocks()                # grant cosmetics as achievements land
         if self.model.turn == HOUSE and not self.model.hand_over \
                 and not self.model.game_over:
             self._ai_timer += dt
@@ -127,7 +142,32 @@ class GinRummyRun(GameRun):
         tag = "GIN! " if r["gin"] else ""
         self.message = (f"{tag}{who} {'win' if who == 'You' else 'wins'} the hand "
                         f"(+{r['points']}). N: next hand.")
-        self.emit("rm_win" if r["winner"] == HUMAN else "rm_lose")
+        undercut = r["winner"] != r["knocker"] and not r["gin"]
+        if self.section is not None:
+            life = self.section["lifetime"]
+            if r["winner"] == HUMAN:
+                life["rm_hand_wins"] = life.get("rm_hand_wins", 0) + 1
+                if r["gin"]:
+                    life["rm_gins"] = life.get("rm_gins", 0) + 1
+                if undercut:
+                    life["rm_undercuts"] = life.get("rm_undercuts", 0) + 1
+                life["rm_streak"] = life.get("rm_streak", 0) + 1
+                life["rm_best_streak"] = max(life.get("rm_best_streak", 0),
+                                             life["rm_streak"])
+            else:
+                life["rm_streak"] = 0     # house win breaks the streak
+            self.save_cb()
+        if r["winner"] == HUMAN:
+            self.emit("rm_win", gin=r["gin"], undercut=undercut, points=r["points"])
+        else:
+            self.emit("rm_lose")
+        if self.model.game_over:
+            win = self.model.scores[HUMAN] >= self.model.target
+            if win and self.section is not None:
+                life = self.section["lifetime"]
+                life["rm_game_wins"] = life.get("rm_game_wins", 0) + 1
+                self.save_cb()
+            self.emit("rm_game", win=win)
 
     # ---------------------------------------------------------------- input
     def handle_key(self, key):
@@ -141,15 +181,22 @@ class GinRummyRun(GameRun):
                 self.model = GinRummy(random.Random(), target=100)
                 self._first = HUMAN
                 self.message = "New game. Your turn."
+                self._count_new_hand()
             elif self.model.hand_over:
                 self._first = HOUSE if self._first == HUMAN else HUMAN
                 self.model.deal(first=self._first)
                 self.knock_mode = False
                 self.message = ("Your turn." if self._first == HUMAN
                                 else "House to start.")
+                self._count_new_hand()
         elif key == pygame.K_k:
             self._toggle_knock()
         return True
+
+    def _count_new_hand(self):
+        if self.section is not None:
+            self.section["lifetime"]["rm_hands"] += 1
+            self.save_cb()
 
     def _toggle_knock(self):
         if self.model.turn == HUMAN and self.model.phase == "discard":
@@ -352,6 +399,10 @@ class GinRummyRun(GameRun):
             banner("HAND WON", 2.0)
         elif etype == "rm_lose":
             audio.play("game_over")
+        elif etype == "rm_game":
+            if data.get("win"):
+                audio.play("win")
+                banner("GAME WON", 2.0)
 
 
 def _in(px, py, x, y, w, h):

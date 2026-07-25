@@ -76,10 +76,73 @@ def test_ai_game():
     print(f"AI game OK (final {m.scores}, deterministic)")
 
 
+def test_rummy_achievements():
+    from games.rummy.achievements import ACHIEVEMENTS
+    by = {a.id: a for a in ACHIEVEMENTS}
+    assert by["first_hand"].check("rm_win", {}, {}, {})
+    assert not by["first_hand"].check("rm_lose", {}, {}, {})
+    assert by["first_gin"].check("rm_win", {"gin": True}, {}, {})
+    assert not by["first_gin"].check("rm_win", {"gin": False}, {}, {})
+    assert by["undercut"].check("rm_win", {"undercut": True}, {}, {})
+    assert not by["undercut"].check("rm_win", {"undercut": False}, {}, {})
+    assert by["game_win"].check("rm_game", {"win": True}, {}, {})
+    assert not by["game_win"].check("rm_game", {"win": False}, {}, {})
+    # grind milestones fire from counters alone (progress-checked every frame)
+    assert by["hot_streak"].check(None, None, {"rm_streak": 5}, {})
+    assert not by["hot_streak"].check(None, None, {"rm_streak": 4}, {})
+    assert by["hand_century"].check(None, None, {"rm_hands": 100}, {})
+    assert not by["hand_century"].check(None, None, {"rm_hands": 99}, {})
+    assert by["shark"].check(None, None, {"rm_hand_wins": 250}, {})
+    assert not by["shark"].check(None, None, {"rm_hand_wins": 249}, {})
+    assert by["hot_streak"].progress({"rm_streak": 2}, {}) == (2, 5)
+    assert by["hand_century"].progress({"rm_hands": 40}, {}) == (40, 100)
+    assert by["shark"].progress({"rm_hand_wins": 5000}, {}) == (250, 250)
+    # ids must not collide with solitaire's skin-gate ids
+    from games.solitaire.achievements import ACHIEVEMENTS as SOL
+    assert not (set(by) & {a.id for a in SOL})
+    print(f"rummy achievements OK ({len(ACHIEVEMENTS)} incl. grind, no id collision)")
+
+
+def test_rummy_wiring():
+    import games.rummy.game as rgame
+    from meta.achievements import AchievementEngine
+
+    run = rgame.create_run("gin", random.Random(3))
+    section = {"achievements": {}, "lifetime": {}, "unlocked_skins": []}
+    settings = {}
+    run.attach_profile(section, settings, lambda: None)
+    assert section["lifetime"]["rm_hands"] == 1   # the initial deal counts
+
+    # contrive a gin hand for P1 (the human) and end it via the model directly
+    gin = [Card(3, "H"), Card(4, "H"), Card(5, "H"), Card(6, "H"),
+           Card(7, "S"), Card(7, "H"), Card(7, "D"),
+           Card(9, "C"), Card(10, "C"), Card(11, "C")]
+    run.model.hands["P1"] = gin
+    run.model.hands["P2"] = [Card(2, "C"), Card(3, "C"), Card(4, "C"), Card(5, "C"),
+                             Card(6, "S"), Card(7, "S"), Card(8, "S"), Card(9, "S"),
+                             Card(13, "S"), Card(8, "H")]
+    run.model._end_hand("P1")
+    run._announce()
+
+    engine = AchievementEngine(section, rgame.ACHIEVEMENTS)
+    unlocked = {a.id for a in engine.on_frame(run.drain_events(), run.run_stats())}
+    assert {"first_hand", "first_gin"} <= unlocked
+    assert section["lifetime"]["rm_hand_wins"] == 1
+    assert section["lifetime"]["rm_gins"] == 1
+    assert section["lifetime"]["rm_streak"] == 1
+
+    # the shared sync mirrors the tied premium deck into settings["tabletop"]
+    run.update(0.016, None)
+    assert "juniper" in settings["tabletop"]["unlocked_decks"]
+    print("gin rummy wiring OK (achievements + grind counters + cosmetic sync)")
+
+
 def main():
     test_meld_engine()
     test_scoring()
     test_ai_game()
+    test_rummy_achievements()
+    test_rummy_wiring()
     print("ALL RUMMY TESTS PASSED")
 
 

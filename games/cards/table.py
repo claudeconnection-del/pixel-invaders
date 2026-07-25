@@ -39,6 +39,29 @@ def available_felts(store):
     return skins.available_felts(set(store.get("unlocked_felts", [])))
 
 
+def sync_unlocks(section, settings, save_cb):
+    """Mirror any earned cosmetic-unlock achievements (a game's
+    section["achievements"]) into the shared tabletop store so the tied
+    premium deck/felt becomes selectable. Shared by every tabletop game so
+    unlocks earned in one game (e.g. Rummy's `first_gin`) show up as soon as
+    any tabletop game's `settings["tabletop"]` is consulted."""
+    if section is None or settings is None:
+        return
+    tt = tabletop_store(settings)
+    got = set(section.get("achievements", {}).keys())
+    changed = False
+    for d in skins.DECKS:
+        if d.premium in got and d.id not in tt["unlocked_decks"]:
+            tt["unlocked_decks"].append(d.id)
+            changed = True
+    for f in skins.FELTS:
+        if f.premium in got and f.id not in tt["unlocked_felts"]:
+            tt["unlocked_felts"].append(f.id)
+            changed = True
+    if changed:
+        save_cb()
+
+
 # ------------------------------------------------------------- felt drawing
 def draw_felt_backdrop(renderer, felt, felt_preset, t):
     """3D pass: a living ambient-scene felt, or an empty backdrop otherwise."""

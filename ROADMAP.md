@@ -19,6 +19,7 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
 .venv/Scripts/python.exe main.py                  # run the cabinet
 .venv/Scripts/python.exe tools/smoke_test.py      # boots the app, drives every screen + game
 .venv/Scripts/python.exe tools/test_cards.py      # tabletop: deck / skins / Solitaire rules
+.venv/Scripts/python.exe tools/test_rummy.py      # tabletop: Gin Rummy rules + achievements
 .venv/Scripts/python.exe tools/test_ambient.py    # ambient presets / idle / mood rules
 .venv/Scripts/python.exe tools/test_battleship.py tools/test_companion.py
 .venv/Scripts/python.exe tools/test_meta.py tools/test_games.py tools/test_world.py tools/test_render.py
@@ -40,24 +41,28 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   (Klondike rules + table + click-to-pick/drop play, **double-click → foundation** from anywhere,
   **auto-complete** prompt that pops in once no tableau card is face-down and cascades the finish,
   `TAB` deck/felt skin picker, grind achievements century/millennium=1000-games/founder +
-  cosmetic unlocks). Cosmetics store: `settings["tabletop"]`. **Rich skin library**: 21 decks
+  cosmetic unlocks). Cosmetics store: `settings["tabletop"]`. **Rich skin library**: 22 decks
   (geometric backs — grid/checker/dots/brick/diamond/cross/pinstripe/frames/emblem — via
-  `cards.render` BACK_PATTERNS + `back_bg`; high-contrast light/dark faces) and 24 felts
+  `cards.render` BACK_PATTERNS + `back_bg`; high-contrast light/dark faces) and 25 felts
   (solids incl. high-contrast, gradients, `pattern:` geometric washes carbon/grid/checker/dots,
   and dynamic `scene:` felts). The geometric `lattice` scene is shared with ambient mode (a new
   free "Lattice" preset — 7 free / 3 premium ambient scenes now). This is the solid base for the
   remaining card games.
+- **Rummy (Gin) — achievements + grind counters + premium cosmetics (CAB-5).** ✅ 7 achievements
+  (`first_hand/first_gin/undercut/game_win/hot_streak/hand_century/shark`) in
+  `games/rummy/achievements.py`; lifetime counters `rm_hands/rm_hand_wins/rm_gins/rm_undercuts/
+  rm_game_wins/rm_streak/rm_best_streak` wired in `games/rummy/game.py` (seeded on deal, updated
+  in `_announce`, redeal paths counted). New premium cosmetics: deck `juniper` (unlocks on
+  `first_gin`) + felt `speakeasy` (unlocks on `game_win`). Extracted the shared cosmetic-unlock
+  sync out of Solitaire into `games/cards/table.py:sync_unlocks(section, settings, save_cb)`,
+  called per-frame by both Solitaire and Rummy (Solitaire's behavior unchanged).
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
-1. **Rummy (Gin)** — 🔧 PLAYABLE vs AI. Headless core `games/rummy/model.py`
-   (deal/draw/discard/knock, `best_deadwood` meld engine, gin/undercut scoring) + `ai.py` +
-   `tools/test_rummy.py`. Cabinet view `games/rummy/game.py` (GinRummyRun: your hand face-up with
-   melds grouped + deadwood count, house hand face-down, stock/discard, click-to-draw/discard,
-   K to knock, hand/game-over screens) — reuses `cards/table` felt+picker; registered in TABLETOP;
-   smoke drives a hand to completion. **NEXT: Rummy achievements** (first_gin/first_win/grind), then
-   Poker. (Lay-offs onto the knocker's melds deferred — noted in model.py.)
-2. **Poker** — 5-card **video poker** (hold/draw + payouts) first; heads-up vs-AI optional later.
-3. **Backgammon** — 24 points + dice, pip-count greedy AI; adds **board/checker skins**.
+1. **Rummy lay-offs** onto the knocker's melds (CAB-6, deferred from the first Rummy pass).
+2. **Poker** — 5-card **video poker** (hold/draw + payouts) headless core (CAB-7, in progress in
+   an isolated lane), then table view (CAB-8) + achievements (CAB-9).
+3. **Backgammon** — 24 points + dice, pip-count greedy AI (CAB-10, in progress in an isolated
+   lane), then table view (CAB-11) + board/checker skins (CAB-12).
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
