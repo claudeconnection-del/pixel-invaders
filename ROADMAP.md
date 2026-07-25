@@ -67,6 +67,10 @@ Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
   others watch it in the Replay Theater.
 - **Speedrun category** — Mari0-style portal platformer, a racer, a top-down; replays double as
   speedrun submissions; wants a tamper-resistance mark on replays.
+  Spec + plan drafted (CAB-17): `docs/superpowers/specs/2026-07-25-speedrun-category-design.md` ·
+  `docs/superpowers/plans/2026-07-25-speedrun-category.md` — flagship is the portal platformer
+  (working title "Riftrunner"), any% only for v1, replay-as-submission signed per CAB-13.
+  **Awaiting owner approval before implementation starts.**
 
 ## Conventions (short)
 - **Add a game** = one folder `games/<id>/` exposing `INFO` (`arcade.game_api.GameInfo`),
