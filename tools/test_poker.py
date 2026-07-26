@@ -221,12 +221,66 @@ def test_rng_sweep_rtp_smoke():
           f"{len(seen_ranks)}/10 hand classes hit)")
 
 
+def test_poker_achievements():
+    from games.poker.achievements import ACHIEVEMENTS
+    by = {a.id: a for a in ACHIEVEMENTS}
+    assert by["first_paid"].check("vp_win", {}, {}, {})
+    assert not by["first_paid"].check("vp_lose", {}, {}, {})
+    assert by["natural_royal"].check("vp_win", {"rank_key": "royal_flush"}, {}, {})
+    assert not by["natural_royal"].check("vp_win", {"rank_key": "flush"}, {}, {})
+    assert by["quads"].check("vp_win", {"rank_key": "four_kind"}, {}, {})
+    assert not by["quads"].check("vp_win", {"rank_key": "full_house"}, {}, {})
+    assert by["full_houses_10"].check(None, None, {"vp_full_houses": 10}, {})
+    assert not by["full_houses_10"].check(None, None, {"vp_full_houses": 9}, {})
+    assert by["vp_hands_500"].check(None, None, {"vp_hands": 500}, {})
+    assert by["high_roller"].check(None, None, {"vp_best_credits": 1000}, {})
+    assert not by["high_roller"].check(None, None, {"vp_best_credits": 999}, {})
+    assert by["full_houses_10"].progress({"vp_full_houses": 4}, {}) == (4, 10)
+    assert by["vp_hands_500"].progress({"vp_hands": 5000}, {}) == (500, 500)
+    # ids must not collide with the other tabletop games' skin-gate ids
+    from games.solitaire.achievements import ACHIEVEMENTS as SOL
+    from games.rummy.achievements import ACHIEVEMENTS as RUM
+    sol_ids = {a.id for a in SOL}
+    rum_ids = {a.id for a in RUM}
+    assert not (set(by) & sol_ids) and not (set(by) & rum_ids)
+    print(f"poker achievements OK ({len(ACHIEVEMENTS)} incl. grind, no id collision)")
+
+
+def test_poker_wiring():
+    import games.poker.game as pgame
+    from meta.achievements import AchievementEngine
+
+    run = pgame.create_run("jacks", random.Random(9))
+    section = {"achievements": {}, "lifetime": {}, "unlocked_skins": []}
+    settings = {}
+    run.attach_profile(section, settings, lambda: None)
+
+    run.model.bet = MAX_BET
+    run._deal_or_draw()                 # deals a hand
+    run.model.hand = _hand("AS", "KS", "QS", "JS", "10S")   # contrive a royal
+    run.model.held = [True] * 5
+    run._deal_or_draw()                 # settles as a max-bet royal jackpot
+
+    assert section["lifetime"]["vp_hands"] == 1
+    assert section["lifetime"]["vp_paid"] == 1
+
+    engine = AchievementEngine(section, pgame.ACHIEVEMENTS)
+    unlocked = {a.id for a in engine.on_frame(run.drain_events(), run.run_stats())}
+    assert {"first_paid", "natural_royal"} <= unlocked
+
+    run.update(0.016, None)
+    assert "high_roller" in settings["tabletop"]["unlocked_decks"]
+    print("video poker wiring OK (achievements + grind counters + cosmetic sync)")
+
+
 def main():
     test_evaluator_truth_table()
     test_payout_math()
     test_deal_draw_determinism()
     test_credits_ledger()
     test_rng_sweep_rtp_smoke()
+    test_poker_achievements()
+    test_poker_wiring()
     print("ALL POKER TESTS PASSED")
 
 

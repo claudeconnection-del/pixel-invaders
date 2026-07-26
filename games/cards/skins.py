@@ -103,6 +103,9 @@ DECKS = [
              premium="millennium"),
     DeckSkin("juniper", "Juniper", "cross", _CREAM, [24, 32, 22], _RED,
              _rgb(theme.FERN), back_bg=[20, 28, 20], premium="first_gin"),
+    DeckSkin("high_roller", "High Roller", "diamond", [18, 16, 12],
+             _rgb(theme.GOLD), _RED, _rgb(theme.GOLD), back_bg=[10, 9, 7],
+             premium="natural_royal"),
 ]
 
 
@@ -178,6 +181,8 @@ FELTS = [
              premium="streak_3"),
     FeltSkin("speakeasy", "Speakeasy", "pattern:carbon",
              [[30, 20, 14], _rgb(theme.HONEY)], premium="game_win"),
+    FeltSkin("casino_floor", "Casino Floor", "pattern:dots",
+             [[46, 12, 16], _rgb(theme.GOLD)], premium="quads"),
 ]
 
 

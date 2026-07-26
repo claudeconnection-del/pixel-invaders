@@ -95,7 +95,11 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
    200 credits when tapped out (`vp_credits`/`vp_rebuys` persisted in `section["lifetime"]`);
    reuses `cards/table` felt+picker exactly like rummy. Tests: `tools/test_poker.py` (rules,
    green already), `tools/smoke_test.py` poker block (bet/deal/hold/draw/rebuy live).
-   **NEXT: achievements** (CAB-9).
+   **Achievements done (CAB-9)**: `games/poker/achievements.py` — 6 achievements
+   (`first_paid/natural_royal/quads/full_houses_10/vp_hands_500/high_roller`); lifetime
+   counters `vp_hands/vp_paid/vp_full_houses/vp_best_credits` wired at deal/draw. New premium
+   cosmetics: deck `high_roller` (unlocks on `natural_royal`) + felt `casino_floor` (unlocks
+   on `quads`). **Poker is now feature-complete.**
 3. **Backgammon** — ✅ **headless core done** (CAB-10): `games/backgammon/model.py`
    (signed `points[24]` + bar/off, pip_count, dice via the run's rng with doubles = four
    moves, `legal_moves`/`apply` honouring bar-first entry, blocking, hitting, exact/overshoot

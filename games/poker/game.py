@@ -14,6 +14,7 @@ from game.theme import TEXT, DIM, EMBER, GOLD, GOOD, PANEL
 from games.cards import render as card_render
 from games.cards import skins
 from games.cards import table
+from games.poker.achievements import ACHIEVEMENTS as _POKER_ACHIEVEMENTS
 from games.poker.model import MAX_BET, PAYTABLE, RANK_ORDER, LABELS, VideoPoker
 
 INFO = GameInfo(
@@ -23,7 +24,9 @@ INFO = GameInfo(
     modes=[("jacks", "JACKS OR BETTER")],
     has_scores=False, attract=False, game_music=True, music_pool="menu",
 )
-ACHIEVEMENTS = []          # wired in a later increment (CAB-9)
+ACHIEVEMENTS = _POKER_ACHIEVEMENTS
+_GRIND_KEYS = ("vp_credits", "vp_rebuys", "vp_hands", "vp_paid",
+               "vp_full_houses", "vp_best_credits")
 
 CARD_W, CARD_H = 90, 126
 GAP = 20
@@ -70,8 +73,11 @@ class VideoPokerRun(GameRun):
         self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
         life = section["lifetime"]
         life.setdefault("vp_credits", REBUY_AMOUNT)
-        life.setdefault("vp_rebuys", 0)
+        for k in _GRIND_KEYS:
+            if k != "vp_credits":
+                life.setdefault(k, 0)
         self.model.credits = life["vp_credits"]
+        life["vp_best_credits"] = max(life["vp_best_credits"], self.model.credits)
         self._sync_unlocks()
         self.save_cb()
 
@@ -108,7 +114,9 @@ class VideoPokerRun(GameRun):
 
     def _save_credits(self):
         if self.section is not None:
-            self.section["lifetime"]["vp_credits"] = self.model.credits
+            life = self.section["lifetime"]
+            life["vp_credits"] = self.model.credits
+            life["vp_best_credits"] = max(life["vp_best_credits"], self.model.credits)
             self.save_cb()
 
     # ---------------------------------------------------------------- input
@@ -162,6 +170,13 @@ class VideoPokerRun(GameRun):
         if m.phase == "hold":
             rank_key, label, won = m.draw()
             self._save_credits()
+            if self.section is not None:
+                life = self.section["lifetime"]
+                if won > 0:
+                    life["vp_paid"] = life.get("vp_paid", 0) + 1
+                if rank_key == "full_house":
+                    life["vp_full_houses"] = life.get("vp_full_houses", 0) + 1
+                self.save_cb()
             if won > 0:
                 self.message = f"{label.upper()} — +{won}"
                 self.emit("vp_win", rank_key=rank_key, amount=won)
@@ -174,6 +189,10 @@ class VideoPokerRun(GameRun):
             return
         if m.deal(self.rng):
             self._save_credits()
+            if self.section is not None:
+                life = self.section["lifetime"]
+                life["vp_hands"] = life.get("vp_hands", 0) + 1
+                self.save_cb()
             self.emit("vp_deal")
             self.message = "Toggle holds (1-5), then D to draw."
 
