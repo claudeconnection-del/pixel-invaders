@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#120c09">
+<title>Cabinet Man — Battleship</title>
+<style>
+  :root{
+    --bg:#120c09; --panel:#1e150e; --panel2:#26190f; --hair:#4a3d30;
+    --text:#f3e7d4; --dim:#ab9880; --ember:#eea94c; --gold:#ecc260;
+    --hit:#d9635a; --miss:#6b6b6b; --ship:#5b9bd5; --ship-edge:#4a86b8;
+    --good:#63c8a6; --aim:#f5a524;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{background:var(--bg); color:var(--text); font-family:-apple-system,
+    BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; overscroll-behavior:none;
+    display:flex; flex-direction:column; min-height:100%;}
+  header{padding:12px 16px; border-bottom:1px solid var(--hair);
+    display:flex; align-items:center; gap:10px;}
+  header .brand{font-weight:800; letter-spacing:.04em; font-size:15px;}
+  header .brand b{color:var(--ember);}
+  header .seat{margin-left:auto; font-size:12px; color:var(--dim);}
+  header .seat b{color:var(--gold);}
+  main{flex:1; padding:16px; display:flex; flex-direction:column; gap:14px;}
+  .banner{padding:10px 12px; border-radius:10px; background:var(--panel);
+    font-size:14px; text-align:center;}
+  .banner.turn{background:var(--good); color:#06231a; font-weight:800; letter-spacing:.03em;}
+  .banner.wait{color:var(--dim);}
+  .banner.win{background:var(--gold); color:#2a1e05; font-weight:800;}
+  .banner.lose{background:var(--hit); color:#2a0a09; font-weight:800;}
+  .label{font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--dim); margin:2px 2px -4px;}
+  .grid{display:grid; gap:3px; touch-action:manipulation;}
+  .cell{aspect-ratio:1; border:1px solid var(--hair); border-radius:3px;
+    background:var(--panel2); display:flex; align-items:center;
+    justify-content:center; font-size:14px; user-select:none;}
+  .cell.sea{background:#14212e;}
+  .cell.hit{background:var(--hit); border-color:var(--hit);}
+  .cell.miss{background:var(--miss); border-color:transparent; opacity:.7;}
+  .cell.ship{background:var(--ship); border-color:var(--ship-edge);}
+  .cell.sunk{background:#7a2f2b; border-color:#7a2f2b;}
+  .cell.aim{outline:3px solid var(--aim); outline-offset:-2px;}
+  .cell.pick{cursor:pointer;}
+  .row{display:flex; gap:10px; align-items:center;}
+  .tray{display:flex; gap:6px; flex-wrap:wrap; align-items:center;}
+  .ship-pip{height:16px; border-radius:3px; background:var(--ship); opacity:.5;}
+  .ship-pip.active{opacity:1; outline:2px solid var(--gold); outline-offset:1px;}
+  button{font:inherit; font-weight:700; border:0; border-radius:10px;
+    padding:12px 14px; background:var(--panel); color:var(--text);
+    border:1px solid var(--hair);}
+  button.primary{background:var(--ember); color:#241606; border-color:transparent;}
+  button.fire{background:var(--hit); color:#fff; border-color:transparent; width:100%;
+    font-size:16px; letter-spacing:.05em;}
+  button:disabled{opacity:.4;}
+  button.ghost{background:transparent;}
+  .btns{display:flex; gap:8px; flex-wrap:wrap;}
+  .btns button{flex:1; min-width:70px;}
+  input{font:inherit; padding:12px; border-radius:10px; border:1px solid var(--hair);
+    background:var(--panel2); color:var(--text); width:100%;}
+  .center{display:flex; flex-direction:column; gap:14px; margin:auto; width:100%;
+    max-width:360px;}
+  .err{color:var(--hit); font-size:13px; min-height:18px; text-align:center;}
+  .hint{color:var(--dim); font-size:12px; text-align:center;}
+  .grids{display:flex; flex-direction:column; gap:8px;}
+  .mini{max-width:56%;}
+  footer{padding:8px 16px; border-top:1px solid var(--hair); font-size:11px;
+    color:var(--dim); text-align:center;}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">CABINET&nbsp;<b>MAN</b></span>
+  <span class="brand" style="color:var(--dim);font-weight:600">· Battleship</span>
+  <span class="seat" id="seat"></span>
+</header>
+<main id="app"></main>
+<footer id="foot">secret local — this screen is yours</footer>
+
+<script>
+"use strict";
+const SIZE = 10;
+const FLEET = [["Carrier",5],["Battleship",4],["Cruiser",3],["Submarine",3],["Destroyer",2]];
+
+const qs = new URLSearchParams(location.search);
+const state = {
+  code: (qs.get("code") || "").toUpperCase(),
+  name: "", seat: null, token: null,
+  view: null, ver: -1, joinError: "",
+  // placement (local until Ready)
+  placed: [], horizontal: true, readySent: false,
+  aim: null,        // {x,y} selected enemy target
+  netdown: false,
+};
+
+const app = document.getElementById("app");
+const seatEl = document.getElementById("seat");
+const storeKey = () => "cabinetman.bs." + state.code;
+
+function save(){ try{ localStorage.setItem(storeKey(),
+  JSON.stringify({seat:state.seat, token:state.token})); }catch(e){} }
+function load(){ try{ return JSON.parse(localStorage.getItem(storeKey())||"null"); }catch(e){ return null; } }
+function clearStore(){ try{ localStorage.removeItem(storeKey()); }catch(e){} }
+
+// ------------------------------------------------------------------ net
+async function api(path, body){
+  const opt = body ? {method:"POST", headers:{"Content-Type":"application/json"},
+                      body:JSON.stringify(body)} : {};
+  const r = await fetch(path, opt);
+  return r.json();
+}
+
+async function doJoin(){
+  state.joinError = "";
+  const r = await api("/join", {code:state.code, name:state.name});
+  if(r.error){
+    state.joinError = ({wrong_code:"Wrong code.", name_taken:"That name is taken.",
+      full:"This match is full."})[r.error] || r.error;
+    render(); return;
+  }
+  state.seat = r.seat; state.token = r.token; save();
+  seatEl.innerHTML = "you are <b>"+state.seat+"</b>";
+  pollLoop();
+}
+
+async function pollLoop(){
+  while(true){
+    try{
+      const r = await fetch(`/poll?seat=${state.seat}&token=${encodeURIComponent(state.token)}&v=${state.ver}`);
+      const data = await r.json();
+      state.netdown = false;
+      if(data.error){
+        if(data.error === "bad_token"){ clearStore(); state.seat=null; state.token=null;
+          seatEl.textContent=""; render(); return; }
+        continue;
+      }
+      if(data.changed === false){ continue; }
+      state.ver = data.v; state.view = data.view;
+      if(state.aim){ // drop stale aim if that cell is now fired
+        const b = enemyBoard(); if(b && firedSet(b).has(key(state.aim.x,state.aim.y))) state.aim=null;
+      }
+      render();
+    }catch(e){
+      state.netdown = true; render();
+      await new Promise(res=>setTimeout(res, 1200));   // reconnect backoff
+    }
+  }
+}
+
+async function sendReady(){
+  const layout = state.placed.map(s=>({name:s.name, size:s.size, x:s.x, y:s.y, horizontal:s.horizontal}));
+  state.readySent = true; render();
+  const r = await api("/action", {seat:state.seat, token:state.token, kind:"ready", layout});
+  if(r && r.error){ state.readySent = false; render(); }
+}
+
+async function sendFire(){
+  if(!state.aim) return;
+  const {x,y} = state.aim; state.aim = null; render();
+  await api("/action", {seat:state.seat, token:state.token, kind:"fire", x, y});
+}
+
+// ------------------------------------------------------- placement helpers
+function cellsFor(x,y,size,horizontal){
+  const out=[];
+  for(let i=0;i<size;i++){
+    const cx = x + (horizontal? i:0), cy = y + (horizontal? 0:i);
+    if(cx<0||cy<0||cx>=SIZE||cy>=SIZE) return null;
+    out.push([cx,cy]);
+  }
+  return out;
+}
+function occupied(){ const s=new Set(); state.placed.forEach(p=>cellsFor(p.x,p.y,p.size,p.horizontal).forEach(c=>s.add(key(c[0],c[1])))); return s; }
+function canPlace(x,y,size,horizontal){
+  const cells = cellsFor(x,y,size,horizontal); if(!cells) return false;
+  const occ = occupied(); return cells.every(c=>!occ.has(key(c[0],c[1])));
+}
+function placeCurrent(x,y){
+  const idx = state.placed.length; if(idx>=FLEET.length) return;
+  const [name,size] = FLEET[idx];
+  if(canPlace(x,y,size,state.horizontal)){ state.placed.push({name,size,x,y,horizontal:state.horizontal}); render(); }
+}
+function autoPlace(){
+  state.placed=[];
+  const rnd=(n)=>Math.floor(Math.random()*n);
+  for(const [name,size] of FLEET){
+    for(let t=0;t<500;t++){
+      const h = Math.random()<0.5;
+      const x = h? rnd(SIZE-size+1):rnd(SIZE), y = h? rnd(SIZE):rnd(SIZE-size+1);
+      if(canPlace(x,y,size,h)){ state.placed.push({name,size,x,y,horizontal:h}); break; }
+    }
+  }
+  render();
+}
+function undo(){ state.placed.pop(); render(); }
+
+// --------------------------------------------------------------- view utils
+const key=(x,y)=>x+","+y;
+function otherSeat(){ return Object.keys(state.view.boards).find(s=>s!==state.view.you); }
+function enemyBoard(){ return state.view ? state.view.boards[otherSeat()] : null; }
+function markMap(board){ const m=new Map(); board.shots.forEach(s=>m.set(key(s.x,s.y), s.hit?"hit":"miss"));
+  board.sunk.forEach(sh=>sh.cells.forEach(c=>m.set(key(c[0],c[1]),"sunk"))); return m; }
+function firedSet(board){ return new Set(board.shots.map(s=>key(s.x,s.y))); }
+
+// ------------------------------------------------------------------ render
+function render(){
+  if(!state.seat){ return renderJoin(); }
+  if(!state.view){ return renderInfo("Connecting…"); }
+  const v = state.view;
+  if(v.phase === "place" && !state.readySent) return renderPlace();
+  if(v.phase === "place" && state.readySent) return renderInfo("Fleet locked. Waiting for the other player…");
+  if(v.phase === "fire") return renderPlay();
+  if(v.phase === "over") return renderOver();
+  renderInfo("…");
+}
+
+function renderJoin(){
+  seatEl.textContent = "";
+  app.innerHTML = "";
+  const box = el("div","center");
+  box.appendChild(el("div","banner","Join the match on the cabinet"));
+  const codeIn = input("Match code", state.code, e=>state.code=e.target.value.toUpperCase());
+  codeIn.style.textTransform="uppercase"; codeIn.maxLength=4;
+  const nameIn = input("Your name", state.name, e=>state.name=e.target.value);
+  const err = el("div","err", state.joinError);
+  const btn = el("button","primary","Join"); btn.style.width="100%";
+  btn.onclick=()=>{ state.name=(nameIn.value||"").trim(); state.code=(codeIn.value||"").trim().toUpperCase();
+    if(state.code && state.name) doJoin(); };
+  box.append(label("Code"), codeIn, label("Name"), nameIn, err, btn,
+    el("div","hint","Two players, two phones. What you see here stays secret."));
+  app.appendChild(box);
+}
+
+function renderInfo(msg){
+  app.innerHTML="";
+  const box=el("div","center");
+  box.appendChild(el("div","banner"+(state.netdown?" lose":" wait"),
+    state.netdown ? "Reconnecting…" : msg));
+  if(state.view && state.view.phase!=="over") box.appendChild(ownFleetGrid());
+  app.appendChild(box);
+}
+
+function renderPlace(){
+  app.innerHTML="";
+  const idx=state.placed.length, remaining=FLEET.length-idx;
+  const head = remaining>0
+    ? `Place your ${FLEET[idx][0]} (${FLEET[idx][1]})`
+    : "Fleet ready — lock it in";
+  app.appendChild(el("div","banner",head));
+  // tray of ship pips
+  const tray=el("div","tray");
+  FLEET.forEach(([n,sz],i)=>{ const p=el("div","ship-pip"+(i===idx?" active":""));
+    p.style.width=(sz*14)+"px"; if(i<idx) p.style.opacity=".9"; tray.appendChild(p); });
+  app.appendChild(tray);
+  // placement grid
+  const occ=occupied();
+  const g=makeGrid((x,y,cell)=>{
+    if(occ.has(key(x,y))) cell.classList.add("ship");
+    else { cell.classList.add("sea","pick"); cell.onclick=()=>placeCurrent(x,y); }
+  });
+  app.appendChild(label("Your waters"));
+  app.appendChild(g);
+  const btns=el("div","btns");
+  const rot=el("button","ghost", state.horizontal?"Rotate ⟳ (H)":"Rotate ⟳ (V)");
+  rot.onclick=()=>{ state.horizontal=!state.horizontal; render(); };
+  const auto=el("button","ghost","Auto"); auto.onclick=autoPlace;
+  const un=el("button","ghost","Undo"); un.disabled=idx===0; un.onclick=undo;
+  btns.append(rot,auto,un); app.appendChild(btns);
+  const ready=el("button","primary","Ready"); ready.style.width="100%";
+  ready.disabled=remaining>0; ready.onclick=sendReady;
+  app.appendChild(ready);
+}
+
+function renderPlay(){
+  app.innerHTML="";
+  const v=state.view, mine=v.your_turn;
+  app.appendChild(el("div","banner"+(mine?" turn":" wait"),
+    mine ? "YOUR TURN — tap a target" : "Opponent's turn — watch the cabinet 📺"));
+  // enemy waters (fire here)
+  app.appendChild(label("Enemy waters"));
+  const eb=enemyBoard(), em=markMap(eb), fired=firedSet(eb);
+  const eg=makeGrid((x,y,cell)=>{
+    const m=em.get(key(x,y));
+    if(m==="hit"||m==="sunk"){ cell.classList.add(m==="sunk"?"sunk":"hit"); cell.textContent="✷"; }
+    else if(m==="miss"){ cell.classList.add("miss"); cell.textContent="•"; }
+    else { cell.classList.add("sea");
+      if(mine){ cell.classList.add("pick"); cell.onclick=()=>{ state.aim={x,y}; render(); }; }
+    }
+    if(state.aim && state.aim.x===x && state.aim.y===y) cell.classList.add("aim");
+  });
+  app.appendChild(eg);
+  const fire=el("button","fire", state.aim?`FIRE at ${col(state.aim.x)}${state.aim.y+1} 🔥`:"Select a target");
+  fire.disabled=!(mine && state.aim); fire.onclick=sendFire;
+  app.appendChild(fire);
+  // own fleet (smaller)
+  app.appendChild(label("Your fleet · "+v.boards[v.you].afloat+" afloat"));
+  const of=ownFleetGrid(); of.classList.add("mini"); app.appendChild(of);
+}
+
+function renderOver(){
+  app.innerHTML="";
+  const v=state.view, won=v.winner===v.you;
+  app.appendChild(el("div","banner"+(won?" win":" lose"),
+    won?"🏆 You win!":"You lose — fleet sunk"));
+  app.appendChild(label("Enemy waters"));
+  const eb=enemyBoard(), em=markMap(eb);
+  app.appendChild(makeGrid((x,y,cell)=>{ const m=em.get(key(x,y));
+    if(m){ cell.classList.add(m==="miss"?"miss":(m==="sunk"?"sunk":"hit")); }
+    else cell.classList.add("sea"); }));
+  app.appendChild(label("Your fleet"));
+  const of=ownFleetGrid(); of.classList.add("mini"); app.appendChild(of);
+  app.appendChild(el("div","hint","Watch the replay on the cabinet."));
+}
+
+function ownFleetGrid(){
+  const v=state.view; const own=v.boards[v.you];
+  const shipCells=new Set(); (v.your_fleet||[]).forEach(s=>s.cells.forEach(c=>shipCells.add(key(c[0],c[1]))));
+  const incoming=markMap(own);
+  return makeGrid((x,y,cell)=>{
+    const m=incoming.get(key(x,y)), isShip=shipCells.has(key(x,y));
+    if(m==="hit"||m==="sunk"){ cell.classList.add(m==="sunk"?"sunk":"hit"); cell.textContent="✸"; }
+    else if(m==="miss"){ cell.classList.add("miss"); cell.textContent="•"; }
+    else if(isShip){ cell.classList.add("ship"); }
+    else cell.classList.add("sea");
+  });
+}
+
+// ------------------------------------------------------------------ dom
+function makeGrid(fn){
+  const g=el("div","grid"); g.style.gridTemplateColumns=`repeat(${SIZE},1fr)`;
+  for(let y=0;y<SIZE;y++) for(let x=0;x<SIZE;x++){
+    const c=el("div","cell"); fn(x,y,c); g.appendChild(c);
+  }
+  return g;
+}
+function el(tag,cls,txt){ const e=document.createElement(tag); if(cls)e.className=cls;
+  if(txt!=null)e.textContent=txt; return e; }
+function label(t){ return el("div","label",t); }
+function input(ph,val,on){ const i=el("input"); i.placeholder=ph; i.value=val||"";
+  i.oninput=on; return i; }
+function col(x){ return "ABCDEFGHIJ"[x] || (x+1); }
+
+// ------------------------------------------------------------------ boot
+(function boot(){
+  const saved = state.code ? load() : null;
+  if(saved && saved.token){
+    state.seat=saved.seat; state.token=saved.token;
+    seatEl.innerHTML="you are <b>"+state.seat+"</b>";
+    pollLoop();
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>

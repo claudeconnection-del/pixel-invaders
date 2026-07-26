@@ -8,6 +8,7 @@ Env:
     ARCADE_CORS_ORIGINS  comma-separated origins for browser reads (default *)
 """
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -21,6 +22,26 @@ from pydantic import BaseModel, Field
 
 from server import db
 from server.scoreboard import render_scoreboard
+
+# CAB-14: mirrors meta/replay.py's canonical JSON + HMAC tamper-mark verifier
+# (hashlib/hmac/json, stdlib only). Deliberately NOT imported from meta/ —
+# the Dockerfile only COPYs server/ into the image (see server/Dockerfile),
+# so pulling in meta/game would need packaging changes; mirroring keeps the
+# server self-contained. Keep this in lockstep with meta/replay.py's
+# _canonical_json/verify_replay if that encoding ever changes.
+def _canonical_replay_json(data):
+    payload = {k: v for k, v in data.items() if k != "sig"}
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _verify_replay(data, key):
+    sig = data.get("sig")
+    if not sig:
+        return False
+    if isinstance(key, str):
+        key = key.encode("utf-8")
+    expected = hmac.new(key, _canonical_replay_json(data), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
 
 API_KEY = os.environ.get("ARCADE_API_KEY", "")
 CORS_ORIGINS = [o.strip() for o in
@@ -284,6 +305,75 @@ def get_match(code: str, since: int = Query(-1)):
     if since >= 0 and match["version"] <= since:
         return {"code": code, "version": match["version"], "changed": False}
     return match
+
+
+# ------------------------------------------------------------- CAB-14: replays
+# Score-row matching: the CAB-13 replay payload (dts/masks/seed/score/sig)
+# carries no player name, so a replay upload names its (game, mode, name,
+# score) explicitly and we match it against an existing `scores` row by that
+# tuple, rather than requiring the client to plumb the row id returned by
+# POST /api/v1/scores back into a second call. That's the simpler of the two
+# options the ticket allows given scoreboard.py's flat, id-less-to-clients
+# storage — it costs a (rare) ambiguity if two identical (name, score) pairs
+# land on the same board, which we accept since a replay is a bonus artifact
+# for an entry, not the entry's identity.
+MAX_REPLAY_BYTES = 256 * 1024
+
+
+class ReplayUpload(BaseModel):
+    game: str = Field(..., max_length=32)
+    mode: str = Field(..., max_length=32)
+    name: str = Field(..., max_length=3)
+    score: int = Field(..., ge=0, le=1_000_000_000)
+    replay: dict[str, Any]
+
+
+@app.post("/replays")
+def upload_replay(body: ReplayUpload,
+                  x_api_key: str | None = Header(default=None)):
+    _check_key(x_api_key)
+    if not SLUG_RE.match(body.game) or not SLUG_RE.match(body.mode):
+        raise HTTPException(status_code=422, detail="bad game/mode slug")
+    name = body.name.upper().strip() or "???"
+    if not NAME_RE.match(name):
+        raise HTTPException(status_code=422, detail="initials must be A-Z/0-9")
+
+    canonical = _canonical_replay_json(body.replay)
+    if len(canonical) > MAX_REPLAY_BYTES:
+        raise HTTPException(status_code=413, detail="replay too large")
+
+    # HMAC-verify with the same shared secret the client signs with
+    # (CABINET_MAN_API_KEY / ARCADE_API_KEY are meant to be the same value
+    # for a paired cabinet — see meta/replay.py's _resolve_key). An
+    # unverifiable signature (wrong key, or tampered payload) is rejected.
+    if not _verify_replay(body.replay, API_KEY):
+        raise HTTPException(status_code=400, detail="bad replay signature")
+
+    rank = db.score_rank(body.game, body.mode, name, body.score)
+    if rank is None or rank > db.RETENTION_TOP_N:
+        raise HTTPException(
+            status_code=409,
+            detail="score not eligible for replay storage "
+                   "(submit the score first, or it's outside the top 10)")
+
+    row_id = db.insert_replay(body.game, body.mode, name, body.score,
+                              body.replay)
+    return {"id": row_id}
+
+
+@app.get("/replays")
+def list_replays(game: str = Query(...), mode: str = Query(...)):
+    if not SLUG_RE.match(game) or not SLUG_RE.match(mode):
+        raise HTTPException(status_code=422, detail="bad game/mode slug")
+    return {"game": game, "mode": mode, "replays": db.list_replays(game, mode)}
+
+
+@app.get("/replays/{replay_id}")
+def get_replay(replay_id: int):
+    replay = db.get_replay(replay_id)
+    if replay is None:
+        raise HTTPException(status_code=404, detail="no such replay")
+    return replay
 
 
 @app.get("/scoreboard", response_class=HTMLResponse)

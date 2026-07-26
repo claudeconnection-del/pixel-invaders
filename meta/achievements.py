@@ -62,3 +62,30 @@ class AchievementEngine:
         if skin and skin not in self.section["unlocked_skins"]:
             self.section["unlocked_skins"].append(skin)
         out.append(achievement)
+
+
+# ------------------------------------------- cabinet-level ambient (mood)
+# Ambient isn't a game, so its "mood" achievements are evaluated at the cabinet
+# level against profile["ambient"] counters + a live context, not game events.
+def evaluate_ambient(profile, context):
+    """Check the ambient mood achievements against `context` (a dict:
+    session_seconds / idle_entries / since_run_end_s / hour) and record any new
+    unlocks in profile['ambient']['achievements']. Returns newly-unlocked
+    Achievement objects (for toasts). Pure/headless — no GL."""
+    from ambient.preset import AMBIENT_ACHIEVEMENTS
+    amb = profile.setdefault("ambient", {})
+    unlocked = amb.setdefault("achievements", {})
+    out = []
+    for aid, name, desc, predicate in AMBIENT_ACHIEVEMENTS:
+        if aid in unlocked:
+            continue
+        try:
+            hit = predicate(context)
+        except (KeyError, TypeError):
+            hit = False
+        if hit:
+            unlocked[aid] = {
+                "unlocked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+            out.append(Achievement(aid, name, desc, lambda *a: False))
+    return out

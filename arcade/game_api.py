@@ -72,3 +72,24 @@ class GameRun:
     # handle_key(key) -> bool: raw keydowns forwarded while PLAYING (before
     #     the cabinet's own handling, except Esc). Return True if consumed.
     # per_frame_particles(renderer, rng): ambient per-frame effects.
+    #
+    # Module-level (not on the run):
+    # STATS_ROWS = [(label, key_or_callable), ...]: when a game module defines
+    #     this, the cabinet's STATS screen shows these rows (resolved by
+    #     resolve_stats_rows below) instead of the generic runs/kills block —
+    #     tabletop games use it to surface their own lifetime counters.
+
+
+def resolve_stats_rows(stats_rows, life):
+    """Resolve a module's STATS_ROWS against a lifetime dict into
+    [(label, value_str)]. Each spec is either a lifetime key (int/str, zero
+    if missing) or a callable taking the lifetime dict and returning a value.
+    Pure — no GL; the STATS screen and its tests both use it."""
+    out = []
+    for label, spec in stats_rows:
+        if callable(spec):
+            value = spec(life)
+        else:
+            value = life.get(spec, 0)
+        out.append((label, str(value)))
+    return out

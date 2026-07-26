@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from game.composer import (  # noqa: E402
     SectionSpec, build_section, chord_tones, concat, decay, drum_track,
-    envelope, midi, mix, noise, note_track, square_wave, sweep, write_wav,
-    PROGRESSIONS, REST,
+    envelope, midi, mix, noise, note_track, square_wave, sweep, triangle_wave,
+    write_wav, PROGRESSIONS, REST,
 )
 
 BASE_DIR = os.path.join(os.path.dirname(__file__), "..")
@@ -134,6 +134,32 @@ def build_metal_section(rng, bars=8):
     return envelope(mix(*layers), attack=0.002, release=0.004)
 
 
+# ----------------------------------------------------------------- ambient
+# Calm "beds" for ambient mode: slow, breathing chord pads (sustained triangle
+# tones with long attack/release so chords swell and cross near silence) plus a
+# faint two-octave-up shimmer. No drums, no melody — just warmth. They form the
+# "ambient" music pool (assets/music/ambient_XX.wav), auto-discovered by the
+# AudioBank sequencer and played when a preset's sound is "bed:*".
+AMBIENT_BEDS = [
+    ("Am F C G", 48, 0.14),   # hearth — warm and low
+    ("F G Am", 55, 0.12),     # drift — airier, a little higher
+]
+
+
+def build_ambient_bed(progression_name, base, amp, chord_dur=5.0):
+    prog = PROGRESSIONS[progression_name]
+    chunks = []
+    for root, is_minor in prog:
+        tones = chord_tones(root, is_minor, base=base)
+        layers = [envelope(triangle_wave(midi(t), chord_dur, amp),
+                           attack=0.28, release=0.4) for t in tones]
+        layers.append(envelope(  # airy shimmer two octaves up, very soft
+            triangle_wave(midi(tones[0] + 24), chord_dur, amp * 0.18),
+            attack=0.45, release=0.45))
+        chunks.append(mix(*layers))
+    return concat(*chunks)
+
+
 def build_menu_section(rng, bars=4):
     """Calm arpeggio variant (not SectionSpec-shaped: no drums, slow)."""
     eighth = 60 / MENU_BPM / 2
@@ -208,9 +234,89 @@ def build_sfx():
     return sfx
 
 
+# --------------------------------------------------------- card table sfx
+# The tabletop games (Solitaire/Rummy/Poker/Backgammon) get their own felt
+# sonics instead of borrowing menu blips. All are deterministic (fixed
+# seeds) and peak-normalized so playback levels sit alongside menu_move.
+SAMPLE_RATE = 22050  # local alias; composer uses the same rate
+CARD_FLIP_SEED = 51001
+CARD_PLACE_SEED = 51002
+CARD_SHUFFLE_SEED = 51003
+CHIP_STACK_SEED = 51004
+
+
+def _silence(seconds):
+    return [0.0] * int(SAMPLE_RATE * seconds)
+
+
+def _normalize(samples, peak=0.7):
+    """Scale so the loudest sample hits `peak` — keeps card sounds comparable
+    to the menu set regardless of how the layers happened to sum."""
+    hi = max((abs(s) for s in samples), default=0.0)
+    if hi <= 1e-6:
+        return samples
+    scale = peak / hi
+    return [s * scale for s in samples]
+
+
+def build_card_flip(seed=CARD_FLIP_SEED):
+    """A short filtered-noise snap with a quick downward pitch tail."""
+    snap = decay(noise(0.045, 0.5, seed=seed), 5.0)
+    tail = decay(sweep(1500, 850, 0.055, 0.14), 3.0)
+    body = mix(snap, concat(_silence(0.015), tail))
+    return _normalize(envelope(body, attack=0.002, release=0.4), 0.68)
+
+
+def build_card_place(seed=CARD_PLACE_SEED):
+    """A soft low thud with a crisp tick on top — a card meeting the felt."""
+    thud = decay(sweep(240, 90, 0.07, 0.4), 3.0)
+    tick = decay(noise(0.012, 0.3, seed=seed), 6.0)
+    body = mix(thud, tick)
+    return _normalize(envelope(body, attack=0.003, release=0.3), 0.7)
+
+
+def build_card_shuffle(seed=CARD_SHUFFLE_SEED):
+    """A flurry of ~14 randomized flip snaps riffling by in ~0.32s."""
+    rng = random.Random(seed)
+    total = int(SAMPLE_RATE * 0.34)
+    buf = [0.0] * total
+    for k in range(14):
+        start = int(rng.uniform(0.0, 0.30) * SAMPLE_RATE)
+        amp = rng.uniform(0.16, 0.32)
+        flip = decay(noise(0.028, amp, seed=seed + k * 17),
+                     rng.uniform(4.0, 7.0))
+        for i, s in enumerate(flip):
+            if start + i < total:
+                buf[start + i] += s
+    return _normalize(envelope(buf, attack=0.003, release=0.15), 0.72)
+
+
+def build_chip_stack(seed=CHIP_STACK_SEED):
+    """Two-to-three ceramic clicks settling — poker credit feedback."""
+    rng = random.Random(seed)
+    parts = []
+    for k in range(rng.choice([2, 3])):
+        freq = rng.choice([1500, 1700, 1900])
+        click = decay(mix(square_wave(freq, 0.02, 0.22),
+                          noise(0.02, 0.18, seed=seed + k * 13)), 6.0)
+        parts.append(click)
+        parts.append(_silence(rng.uniform(0.03, 0.06)))
+    return _normalize(envelope(concat(*parts), attack=0.002, release=0.2), 0.68)
+
+
+CARD_SFX = {
+    "card_flip.wav": build_card_flip,
+    "card_place.wav": build_card_place,
+    "card_shuffle.wav": build_card_shuffle,
+    "chip_stack.wav": build_chip_stack,
+}
+
+
 def main():
     for name, samples in build_sfx().items():
         out(SFX_DIR, name, samples)
+    for name, build in CARD_SFX.items():
+        out(SFX_DIR, name, build())
 
     for i, spec in enumerate(GAME_SECTIONS):
         out(MUSIC_DIR, f"game_{i:02d}.wav", build_section(spec))
@@ -222,6 +328,9 @@ def main():
     metal_rng = random.Random(MUSIC_SEED + 1)
     for i in range(6):
         out(MUSIC_DIR, f"metal_{i:02d}.wav", build_metal_section(metal_rng))
+    for i, (prog, base, amp) in enumerate(AMBIENT_BEDS):
+        out(MUSIC_DIR, f"ambient_{i:02d}.wav",
+            build_ambient_bed(prog, base, amp))
 
 
 if __name__ == "__main__":

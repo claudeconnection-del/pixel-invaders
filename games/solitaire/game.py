@@ -1,0 +1,755 @@
+"""Solitaire (Klondike) — the cabinet-side game module (TABLETOP category).
+
+Rules live in games/solitaire/model.py; this is the table: a 2D overlay view
+drawn over a felt backdrop (solid/gradient wash, or a living ambient-scene
+felt), with mouse pointer-picking (click a card to pick up a run, click a
+destination to drop; double-click sends a card home). Keyboard shortcuts cover
+undo / autoplay / new deal. Achievements + grind counters + skin selection are
+wired in later increments; this increment makes it playable.
+"""
+import math
+import random
+
+import pygame
+
+from arcade.game_api import GameInfo, GameRun
+from game.theme import TEXT, DIM, EMBER, GOLD, PANEL, GOOD, DANGER
+from games.cards import render as card_render
+from games.cards import skins
+from games.cards import table
+from games.cards.deck import SUITS
+from games.solitaire.achievements import ACHIEVEMENTS as _SOL_ACHIEVEMENTS
+from games.solitaire.model import Solitaire
+from games.solitaire.pilot import create_pilot  # noqa: F401 — cabinet opt-in
+
+INFO = GameInfo(
+    "solitaire", "SOLITAIRE",
+    "Klondike — clear the tableau, build the foundations.",
+    showcase_sprite="cube",
+    modes=[("draw1", "DRAW ONE"), ("draw3", "DRAW THREE"), ("vegas", "VEGAS")],
+    has_scores=False, attract=False, game_music=True, music_pool="menu",
+)
+
+ACHIEVEMENTS = _SOL_ACHIEVEMENTS
+_GRIND_KEYS = ("sol_games", "sol_wins", "sol_streak", "sol_best_streak",
+               "sol_best_time")
+_VEGAS_KEYS = ("sol_vegas_bank", "sol_vegas_deals")
+VEGAS_BUYIN = 52          # classic Vegas: -$52 per deal
+# Classic arcade Vegas: draw-3 with 3 stock passes.
+_VEGAS_DRAW, _VEGAS_PASSES = 3, 3
+
+def _mmss(sec):
+    sec = int(sec or 0)
+    return f"{sec // 60}:{sec % 60:02d}" if sec else "-"
+
+
+STATS_ROWS = [
+    ("Games played", "sol_games"),
+    ("Wins", "sol_wins"),
+    ("Best streak", "sol_best_streak"),
+    ("Current streak", "sol_streak"),
+    ("Best time", lambda life: _mmss(life.get("sol_best_time"))),
+    ("Vegas bankroll", lambda life: f"${life.get('sol_vegas_bank', 0)}"),
+    ("Vegas deals", "sol_vegas_deals"),
+]
+
+RULES_TEXT = [
+    "OBJECTIVE",
+    "Build all four foundations up from Ace to King, one per suit.",
+    "",
+    "PLAY",
+    "Tableau: stack cards down in alternating colours (red on black).",
+    "Move a whole ordered run at once. Empty columns take a King.",
+    "Click the stock to turn cards to the waste; play from the waste.",
+    "Double-click a card to send it straight to its foundation.",
+    "",
+    "MODES",
+    "Draw One / Draw Three: turn 1 or 3 stock cards at a time.",
+    "Vegas: -$52 buy-in, +$5 per card home, limited stock passes;",
+    "  your bankroll carries across deals.",
+    "",
+    "CONTROLS",
+    "Click: pick/drop   Double-click: send home   U: undo",
+    "Space: autoplay   N: new deal   Tab: skins   H: rules",
+]
+
+# table layout (logical UI units; the table is centred in the full width)
+CARD_W, CARD_H = 96, 132
+GAP = 20
+COL_STRIDE = CARD_W + GAP
+TABLE_W = 7 * CARD_W + 6 * GAP
+TOP_Y = 96
+TABLEAU_TOP = TOP_Y + CARD_H + 30
+FAN_DOWN, FAN_UP = 18, 30
+FOUNDATION_COLS = [3, 4, 5, 6]           # top-row columns holding the 4 suits
+_SUIT_NAME = {"S": "spades", "H": "hearts", "D": "diamonds", "C": "clubs"}
+
+
+class SolitaireRun(GameRun):
+    def __init__(self, mode, rng):
+        self.mode = mode or "draw1"
+        self.vegas = self.mode == "vegas"
+        self.draw_count = _VEGAS_DRAW if self.vegas \
+            else (3 if self.mode == "draw3" else 1)
+        self._pass_limit = _VEGAS_PASSES if self.vegas else None
+        self.rng = rng
+        self.model = Solitaire(self.draw_count, self._pass_limit).deal(rng)
+        self._vegas_home = 0        # cards_home last frame (for the bank diff)
+        self.time = 0.0
+        self.events = []
+        self.section = None
+        self.settings = None
+        self.save_cb = lambda: None
+
+        self.deck = skins.deck_by_id("classic")
+        self.felt = skins.felt_by_id("emberlight")
+        self.four_color = False                # accessibility: 4-color suit inks
+        self._felt_preset = table.make_felt_preset(self.felt)
+        self.tweens = table.Tweens()           # CAB-20: deal/move flight animations
+        self.pad_cursor = table.PadCursor(self)  # CAB-23: gamepad play
+        self.picker = table.SkinPicker(self)   # shared TAB deck/felt picker
+        self.rules = table.RulesOverlay(self)  # shared H rules overlay
+        self.rules_title = INFO.name
+
+        self.sel = None            # current selection (source)
+        self._prev_mb = False
+        self._last_click = None    # (target, time) for double-click detection
+        self._hover = None
+        self.won_flag = False
+        self._W, self._H = 1280, 860
+
+        # auto-complete: once no tableau card is face-down the game can always
+        # be finished; a prompt appears and it plays out card-by-card
+        self.autocompleting = False
+        self._auto_timer = 0.0
+        self._auto_btn = None      # clickable rect while the prompt is up
+
+    # ------------------------------------------------------ cabinet contract
+    @property
+    def score(self):
+        return self.model.cards_home
+
+    @property
+    def run_over(self):
+        return False               # solo table; Esc leaves via the cabinet
+
+    def attach_profile(self, section, settings, save_cb):
+        self.section = section
+        self.settings = settings
+        self.save_cb = save_cb
+        tt = table.tabletop_store(settings)
+        self.deck = skins.deck_by_id(tt.get("deck", "classic"))
+        self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
+        self.four_color = tt.get("four_color", False)
+        life = section["lifetime"]
+        for k in _GRIND_KEYS:
+            life.setdefault(k, 0)
+        for k in _VEGAS_KEYS:
+            life.setdefault(k, 0)
+        life["sol_games"] += 1          # this freshly-dealt game counts as played
+        if self.vegas:
+            self._start_vegas_deal(life)   # buy-in for the opening deal
+        self._sync_unlocks()
+        self._queue_deal_cascade()
+        self.save_cb()
+
+    # --------------------------------------------------- move animations
+    def _tween_dur(self):
+        """0 (instant, exactly pre-CAB-20 behavior) under the low-motion
+        particles setting; otherwise every flight's default duration."""
+        if self.settings is not None and self.settings.get("particles") == "low":
+            return 0.0
+        return 0.15
+
+    def _waste_top_xy(self):
+        ox = self._ox()
+        show = self.model.waste[-3:] if self.draw_count == 3 else self.model.waste[-1:]
+        return (ox + COL_STRIDE + (len(show) - 1) * 24, TOP_Y)
+
+    def _foundation_xy(self, suit):
+        idx = FOUNDATION_COLS[SUITS.index(suit)]
+        return (self._ox() + idx * COL_STRIDE, TOP_Y)
+
+    def _capture_move_positions(self, sel):
+        """(card, from_xy) pairs for the currently selected run, read BEFORE
+        the model mutates — the source pile's cards and their current slots."""
+        kind = sel["kind"]
+        if kind == "waste":
+            return [(self.model.waste[-1], self._waste_top_xy())]
+        if kind == "tableau":
+            col = sel["col"]
+            p = self.model.tableau[col]
+            start = len(p["up"]) - sel["count"]
+            cards = p["up"][start:]
+            ys = self._col_ys(col)
+            ndown = len(p["down"])
+            cx = self._col_x(col)
+            return [(c, (cx, ys[ndown + start + i])) for i, c in enumerate(cards)]
+        if kind == "foundation":
+            suit = sel["suit"]
+            return [(self.model.foundations[suit][-1], self._foundation_xy(suit))]
+        return []
+
+    def _land_positions(self, cards, t):
+        """Post-move landing (x, y) for `cards`, read AFTER the model has
+        already applied the move."""
+        if t[0] == "tableau":
+            j = t[1]
+            ys = self._col_ys(j)
+            p = self.model.tableau[j]
+            n = len(p["down"]) + len(p["up"])
+            start = n - len(cards)
+            cx = self._col_x(j)
+            return [(cx, ys[start + i]) for i in range(len(cards))]
+        if t[0] == "foundation":
+            xy = self._foundation_xy(t[1])
+            return [xy] * len(cards)
+        return [(0, 0)] * len(cards)
+
+    def _queue_move_tween(self, moving, t):
+        """`moving`: (card, from_xy) pairs captured before the mutation;
+        `t` is the drop target they just landed on."""
+        if not moving:
+            return
+        dur = self._tween_dur()
+        if dur <= 0:
+            return
+        cards = [c for c, _ in moving]
+        to_positions = self._land_positions(cards, t)
+        for (card, from_xy), to_xy in zip(moving, to_positions):
+            self.tweens.add((card.rank, card.suit), from_xy, to_xy, dur,
+                            now=self.time)
+
+    def _queue_simple_tween(self, card, from_xy, t):
+        dur = self._tween_dur()
+        if dur <= 0 or card is None:
+            return
+        to_xy = self._land_positions([card], t)[0]
+        self.tweens.add((card.rank, card.suit), from_xy, to_xy, dur, now=self.time)
+
+    def _queue_draw_tween(self):
+        dur = self._tween_dur()
+        if dur <= 0 or not self.model.waste:
+            return
+        card = self.model.waste[-1]
+        self.tweens.add((card.rank, card.suit), (self._ox(), TOP_Y),
+                        self._waste_top_xy(), dur, now=self.time)
+
+    def _queue_deal_cascade(self):
+        """Every freshly-dealt tableau card flies in from the stock, staggered
+        ~20ms apart so the deal reads as a cascade rather than a pop-in."""
+        dur = self._tween_dur()
+        if dur <= 0:
+            return
+        origin = (self._ox(), TOP_Y)
+        i = 0
+        for col in range(7):
+            p = self.model.tableau[col]
+            ys = self._col_ys(col)
+            cx = self._col_x(col)
+            for k, card in enumerate(p["down"] + p["up"]):
+                self.tweens.add((card.rank, card.suit), origin, (cx, ys[k]),
+                                dur, now=self.time, delay=i * 0.02)
+                i += 1
+
+    def _start_vegas_deal(self, life):
+        """Take the buy-in for a fresh Vegas deal and reset the bank diff
+        baseline. Bankroll is cumulative across deals (can go negative)."""
+        life["sol_vegas_bank"] -= VEGAS_BUYIN
+        life["sol_vegas_deals"] += 1
+        self._vegas_home = 0
+
+    def _accrue_vegas(self):
+        """Bank +$5 per card newly home / -$5 per card taken back off, via a
+        per-frame diff of cards_home — covers clicks, autoplay, and undo in one
+        place. New deals reset the baseline separately so they never refund."""
+        if self.section is None:
+            return
+        home = self.model.cards_home
+        if home != self._vegas_home:
+            self.section["lifetime"]["sol_vegas_bank"] += 5 * (home - self._vegas_home)
+            self._vegas_home = home
+            self.save_cb()
+
+    @property
+    def vegas_bank(self):
+        if self.section is None:
+            return 0
+        return self.section["lifetime"].get("sol_vegas_bank", 0)
+
+    def _set_felt(self, felt):
+        self.felt = felt
+        self._felt_preset = table.make_felt_preset(felt)
+
+    def emit(self, etype, **data):
+        self.events.append((etype, data))
+
+    def drain_events(self):
+        out, self.events = self.events, []
+        return out
+
+    def run_stats(self):
+        return {"time": self.time, "moves": self.model.moves,
+                "undos": self.model.undo_count, "won": self.model.won}
+
+    def _sync_unlocks(self):
+        """Mirror any earned cosmetic-unlock achievements into the shared
+        tabletop store so the tied premium deck/felt becomes selectable."""
+        table.sync_unlocks(self.section, self.settings, self.save_cb)
+
+    def run_summary(self):
+        return {"win": self.model.won}
+
+    # ------------------------------------------------------------- input
+    def update(self, dt, inp):
+        self.time += dt                     # felt keeps animating even in panel
+        self._sync_unlocks()                # grant cosmetics as achievements land
+        if self.vegas:
+            self._accrue_vegas()
+        if self.autocompleting:
+            self._tick_autocomplete(dt)
+            self._prev_mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
+            return
+        mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
+        if not self.picker.open and not self.rules.open and mb and not self._prev_mb:
+            self._click(inp.aim_x, inp.aim_y)
+        self._prev_mb = mb
+        self._hover = None if (self.picker.open or self.rules.open) \
+            else self._hit(inp.aim_x, inp.aim_y)
+
+    def rules_lines(self):
+        return RULES_TEXT
+
+    def _tick_autocomplete(self, dt):
+        if self.won_flag:
+            self.autocompleting = False
+            return
+        self._auto_timer -= dt
+        if self._auto_timer > 0:
+            return
+        self._auto_timer = 0.06                 # one card every ~60ms
+        result = self._auto_step()
+        if result == "home":
+            self.emit("sol_home")
+            self._check_win()
+        elif result == "draw":
+            self.emit("sol_draw")
+        else:
+            self.autocompleting = False         # nothing left to do
+        if self.won_flag:
+            self.autocompleting = False          # stop the instant it's won
+
+    def _auto_step(self):
+        """One move toward finishing a solved board: play a top card home, or
+        turn the stock to expose more. Returns 'home' | 'draw' | None."""
+        waste_card = self.model.waste[-1] if self.model.waste else None
+        waste_xy = self._waste_top_xy() if waste_card else None
+        if self.model.waste_to_foundation():
+            self._queue_simple_tween(waste_card, waste_xy,
+                                     ("foundation", waste_card.suit))
+            return "home"
+        for i in range(7):
+            p = self.model.tableau[i]
+            card = p["up"][-1] if p["up"] else None
+            ys = self._col_ys(i)
+            from_xy = (self._col_x(i), ys[-1]) if card else None
+            if self.model.tableau_to_foundation(i):
+                self._queue_simple_tween(card, from_xy, ("foundation", card.suit))
+                return "home"
+        if self.model.stock or self.model.waste:
+            if self.model.draw():
+                self._queue_draw_tween()
+                return "draw"
+        return None
+
+    def _solvable(self):
+        """True once every tableau card is face-up — from here the deal can
+        always be won by cascading to the foundations."""
+        return (not self.won_flag and self.model.cards_home < 52
+                and all(not p["down"] for p in self.model.tableau))
+
+    def _start_autocomplete(self):
+        if self._solvable():
+            self.autocompleting = True
+            self._auto_timer = 0.0
+            self.sel = None
+
+    def handle_key(self, key):
+        if key == pygame.K_h:               # rules always toggle (closes the picker)
+            self.picker.open = False
+            self.rules.toggle()
+            return True
+        if self.rules.open:
+            self.rules.handle_key(key)
+            return True
+        if self.picker.open:
+            self.picker.handle_key(key)
+            return True
+        if key == pygame.K_TAB:             # open the skin picker (deck + felt)
+            self.picker.toggle()
+        elif key in (pygame.K_u, pygame.K_z):
+            if self.model.undo():
+                self.emit("sol_undo")
+        elif key == pygame.K_SPACE:
+            if self._solvable():
+                self._start_autocomplete()          # finish a solved board
+            elif self.model.collect_to_foundations():
+                self.emit("sol_home")               # else: send safe tops home
+                self._check_win()
+        elif key == pygame.K_n:
+            self._new_deal()
+        return True
+
+    def _new_deal(self):
+        if self.section is not None and not self.won_flag:
+            self.section["lifetime"]["sol_streak"] = 0   # gave up: streak breaks
+        self.model = Solitaire(self.draw_count, self._pass_limit).deal(random.Random())
+        self.sel = None
+        self.won_flag = False
+        self.autocompleting = False
+        if self.section is not None:
+            self.section["lifetime"]["sol_games"] += 1
+            if self.vegas:
+                self._start_vegas_deal(self.section["lifetime"])
+            self.save_cb()
+        self._queue_deal_cascade()
+        self.emit("sol_deal")
+
+    def _click(self, px, py):
+        # the auto-complete prompt (when up) takes priority over the board
+        if self._auto_btn and _in(px, py, *self._auto_btn):
+            self._start_autocomplete()
+            return
+        t = self._hit(px, py)
+        if t is None:
+            self.sel = None
+            return
+        if t[0] == "stock":
+            if self.model.draw():
+                self.emit("sol_draw")
+                self._queue_draw_tween()
+            self.sel = None
+            return
+        dbl = (self._last_click and self._last_click[0] == t
+               and self.time - self._last_click[1] < 0.4)
+        self._last_click = (t, self.time)
+        # double-click a card -> straight to its foundation ("obvious place"),
+        # regardless of any current selection
+        if dbl and self._auto_home(t):
+            self.sel = None
+            return
+        if self.sel is None:
+            self._select(t)
+        else:
+            self._drop(t)
+
+    def _auto_home(self, t):
+        """Send the clicked card home if it's a foundation-legal top card."""
+        if t[0] == "waste":
+            card = self.model.waste[-1] if self.model.waste else None
+            from_xy = self._waste_top_xy() if card else None
+            if self.model.waste_to_foundation():
+                self.emit("sol_home")
+                self._queue_simple_tween(card, from_xy, ("foundation", card.suit))
+                self._check_win()
+                return True
+        elif t[0] == "tableau" and t[2] != "empty":
+            col, k = t[1], t[2]
+            p = self.model.tableau[col]
+            card = p["up"][-1] if p["up"] else None
+            ys = self._col_ys(col)
+            from_xy = (self._col_x(col), ys[-1]) if card else None
+            if k == len(p["down"]) + len(p["up"]) - 1 \
+                    and self.model.tableau_to_foundation(col):
+                self.emit("sol_home")
+                self._queue_simple_tween(card, from_xy, ("foundation", card.suit))
+                self._check_win()
+                return True
+        return False
+
+    def _select(self, t):
+        kind = t[0]
+        if kind == "waste" and self.model.waste:
+            self.sel = {"kind": "waste"}
+        elif kind == "tableau":
+            col, k = t[1], t[2]
+            p = self.model.tableau[col]
+            if k == "empty":
+                return
+            ndown = len(p["down"])
+            if k < ndown:            # a face-down card: not selectable
+                return
+            self.sel = {"kind": "tableau", "col": col,
+                        "count": len(p["up"]) - (k - ndown)}
+        elif kind == "foundation" and self.model.foundations[t[1]]:
+            self.sel = {"kind": "foundation", "suit": t[1]}
+
+    def _drop(self, t):
+        sel, moved, home = self.sel, False, False
+        moving = self._capture_move_positions(sel)
+        if t[0] == "tableau":
+            j = t[1]
+            if sel["kind"] == "waste":
+                moved = self.model.waste_to_tableau(j)
+            elif sel["kind"] == "tableau":
+                moved = self.model.tableau_to_tableau(sel["col"], sel["count"], j)
+            elif sel["kind"] == "foundation":
+                moved = self.model.foundation_to_tableau(sel["suit"], j)
+        elif t[0] == "foundation":
+            if sel["kind"] == "waste":
+                moved = home = self.model.waste_to_foundation()
+            elif sel["kind"] == "tableau" and sel["count"] == 1:
+                moved = home = self.model.tableau_to_foundation(sel["col"])
+        self.sel = None
+        if moved:
+            self.emit("sol_home" if home else "sol_move")
+            self._queue_move_tween(moving, t)
+            self._check_win()
+
+    def _check_win(self):
+        if self.model.won and not self.won_flag:
+            self.won_flag = True
+            if self.section is not None:
+                life = self.section["lifetime"]
+                life["sol_wins"] = life.get("sol_wins", 0) + 1
+                life["sol_streak"] = life.get("sol_streak", 0) + 1
+                life["sol_best_streak"] = max(life.get("sol_best_streak", 0),
+                                              life["sol_streak"])
+                t = int(self.time)
+                if not life.get("sol_best_time") or t < life["sol_best_time"]:
+                    life["sol_best_time"] = t
+                self.save_cb()
+            self.emit("sol_win")        # engine sees the updated counters here
+
+    # ------------------------------------------------ gamepad cursor (CAB-23)
+    def pad_targets(self):
+        """Discrete pad-navigable targets: stock, waste, the four
+        foundations, and one per tableau column (its topmost card, or the
+        empty slot) — the same geometry `_hit` resolves against, so a pad
+        confirm and a mouse click at the same spot behave identically.
+        Empty (cursor stays hidden) while a modal — picker, rules, the
+        auto-complete sweep, or the win screen — has the board's attention,
+        exactly like mouse clicks are already gated in `update()`."""
+        if self.picker.open or self.rules.open or self.autocompleting \
+                or self.won_flag:
+            return []
+        ox = self._ox()
+        wfan = CARD_W + (2 * 24 if self.draw_count == 3 else 0)
+        targets = [("stock", ox, TOP_Y, CARD_W, CARD_H),
+                  ("waste", ox + COL_STRIDE, TOP_Y, wfan, CARD_H)]
+        for idx, col in enumerate(FOUNDATION_COLS):
+            suit = SUITS[idx]
+            targets.append((("foundation", suit), ox + col * COL_STRIDE,
+                            TOP_Y, CARD_W, CARD_H))
+        for i in range(7):
+            cx = self._col_x(i)
+            ys = self._col_ys(i)
+            y = ys[-1] if ys else TABLEAU_TOP
+            targets.append((("tableau", i), cx, y, CARD_W, CARD_H))
+        return targets
+
+    # ------------------------------------------------------------ hit-test
+    def _ox(self):
+        return max(20, (self._W - TABLE_W) / 2)
+
+    def _col_x(self, i):
+        return self._ox() + i * COL_STRIDE
+
+    def _col_ys(self, i):
+        p = self.model.tableau[i]
+        ys, y = [], TABLEAU_TOP
+        for _ in p["down"]:
+            ys.append(y)
+            y += FAN_DOWN
+        for _ in p["up"]:
+            ys.append(y)
+            y += FAN_UP
+        return ys
+
+    def _hit(self, px, py):
+        ox = self._ox()
+        if _in(px, py, ox, TOP_Y, CARD_W, CARD_H):
+            return ("stock",)
+        wfan = CARD_W + (2 * 24 if self.draw_count == 3 else 0)
+        if _in(px, py, ox + COL_STRIDE, TOP_Y, wfan, CARD_H):
+            return ("waste",)
+        for idx, col in enumerate(FOUNDATION_COLS):
+            if _in(px, py, ox + col * COL_STRIDE, TOP_Y, CARD_W, CARD_H):
+                return ("foundation", SUITS[idx])
+        for i in range(7):
+            cx = self._col_x(i)
+            if not (cx <= px < cx + CARD_W):
+                continue
+            ys = self._col_ys(i)
+            if not ys:
+                if TABLEAU_TOP <= py < TABLEAU_TOP + CARD_H:
+                    return ("tableau", i, "empty")
+                return None
+            for k in range(len(ys)):
+                bottom = ys[k + 1] if k + 1 < len(ys) else ys[k] + CARD_H
+                if ys[k] <= py < bottom:
+                    return ("tableau", i, k)
+        return None
+
+    # ------------------------------------------------------------ drawing
+    def draw(self, renderer, section):
+        self._W, self._H = renderer.ui_w, renderer.ui_h
+        table.draw_felt_backdrop(renderer, self.felt, self._felt_preset, self.time)
+
+    def draw_hud(self, o, width, height, section):
+        o.offset_x = 0.0
+        W, H = self._W, self._H
+        ox = self._ox()
+        table.draw_felt_wash(o, W, H, self.felt)
+
+        # stock
+        if self.model.stock:
+            card_render.draw_card(o, ox, TOP_Y, CARD_W, CARD_H, None, self.deck,
+                                  face_up=False)
+        else:
+            card_render.draw_slot(o, ox, TOP_Y, CARD_W, CARD_H, "O")
+        self._hover_mark(o, ("stock",), ox, TOP_Y, CARD_W, CARD_H)
+
+        # waste (fan the last up-to-3)
+        wx = ox + COL_STRIDE
+        w = self.model.waste
+        if not w:
+            card_render.draw_slot(o, wx, TOP_Y, CARD_W, CARD_H)
+        else:
+            show = w[-3:] if self.draw_count == 3 else w[-1:]
+            for j, card in enumerate(show):
+                sel = (self.sel and self.sel["kind"] == "waste" and j == len(show) - 1)
+                x, y = self.tweens.pos((card.rank, card.suit),
+                                       (wx + j * 24, TOP_Y), self.time)
+                card_render.draw_card(o, x, y, CARD_W, CARD_H,
+                                      card, self.deck, selected=bool(sel),
+                                      four_color=self.four_color)
+
+        # foundations
+        for idx, col in enumerate(FOUNDATION_COLS):
+            suit = SUITS[idx]
+            fx = ox + col * COL_STRIDE
+            pile = self.model.foundations[suit]
+            if pile:
+                sel = self.sel and self.sel.get("suit") == suit
+                card = pile[-1]
+                x, y = self.tweens.pos((card.rank, card.suit), (fx, TOP_Y), self.time)
+                card_render.draw_card(o, x, y, CARD_W, CARD_H, card,
+                                      self.deck, selected=bool(sel),
+                                      four_color=self.four_color)
+            else:
+                card_render.draw_slot(o, fx, TOP_Y, CARD_W, CARD_H, suit)
+            self._hover_mark(o, ("foundation", suit), fx, TOP_Y, CARD_W, CARD_H)
+
+        # tableau
+        for i in range(7):
+            self._draw_column(o, i)
+
+        self._draw_auto_prompt(o, W)
+        self._draw_footer(o, W, H)
+        self.pad_cursor.draw(o)
+        if self.won_flag:
+            self._draw_win(o, W, H)
+        if self.picker.open:
+            self.picker.draw(o)
+        if self.rules.open:
+            self.rules.draw(o, W, H)
+
+    def _draw_auto_prompt(self, o, W):
+        """Show the auto-complete affordance once the board is solved."""
+        self._auto_btn = None
+        if self.won_flag:
+            return
+        if self.autocompleting:
+            o.text("AUTO-COMPLETING…", W / 2, 34, size=22, color=GOLD, center=True)
+        elif self._solvable():
+            label = "AUTO-COMPLETE"
+            bw = o.text_width(label, size=22) + 60
+            bh = 42
+            bx, by = W / 2 - bw / 2, 20
+            pulse = int(150 + 90 * abs(math.sin(self.time * 3)))
+            o.rect(bx, by, bw, bh, PANEL)
+            o.rect(bx, by, bw, 3, (255, 210, 90, pulse))
+            o.rect(bx, by + bh - 3, bw, 3, (255, 210, 90, pulse))
+            o.text(label, W / 2, by + 10, size=22, color=GOLD, center=True)
+            o.text("Space or click", W / 2, by + bh + 4, size=12, color=DIM,
+                   center=True)
+            self._auto_btn = (bx, by, bw, bh)
+
+    def _draw_column(self, o, i):
+        cx = self._col_x(i)
+        p = self.model.tableau[i]
+        ys = self._col_ys(i)
+        if not ys:
+            card_render.draw_slot(o, cx, TABLEAU_TOP, CARD_W, CARD_H)
+            self._hover_mark(o, ("tableau", i, "empty"), cx, TABLEAU_TOP, CARD_W, CARD_H)
+            return
+        ndown = len(p["down"])
+        nup = len(p["up"])
+        sel_from = None
+        if self.sel and self.sel.get("kind") == "tableau" and self.sel["col"] == i:
+            sel_from = nup - self.sel["count"]          # up-index where selection starts
+        cards = [(c, False) for c in p["down"]] + [(c, True) for c in p["up"]]
+        for k, (card, up) in enumerate(cards):
+            selected = up and sel_from is not None and (k - ndown) >= sel_from
+            x, y = self.tweens.pos((card.rank, card.suit), (cx, ys[k]), self.time)
+            card_render.draw_card(o, x, y, CARD_W, CARD_H, card, self.deck,
+                                  face_up=up, selected=selected,
+                                  four_color=self.four_color)
+        # hover highlight on the frontmost card of the column
+        if self._hover and self._hover[0] == "tableau" and self._hover[1] == i:
+            k = self._hover[2]
+            if k != "empty":
+                card_render.hover_outline(o, cx, ys[k], CARD_W, CARD_H)
+
+    def _hover_mark(self, o, target, x, y, w, h):
+        if self._hover == target:
+            card_render.hover_outline(o, x, y, w, h)
+
+    def _draw_footer(self, o, W, H):
+        o.text(f"{self.model.cards_home}/52 home   moves {self.model.moves}",
+               24, H - 34, size=15, color=DIM)
+        o.text("Click: pick/drop   Double-click: send home   U: undo   "
+               "Space: autoplay   N: new deal   Tab: skins   H: rules",
+               W / 2, H - 34, size=14, color=DIM, center=True)
+        if self.vegas:
+            bank = self.vegas_bank
+            deal_take = self.model.vegas_delta
+            col = GOOD if bank >= 0 else DANGER
+            sign = "-$" if bank < 0 else "$"
+            o.text(f"BANK {sign}{abs(bank)}", 24, 20, size=22, color=col)
+            o.text(f"this deal +${deal_take}   passes "
+                   f"{self.model.recycles}/{self.model.pass_limit}",
+                   24, 48, size=14, color=DIM)
+
+    def _draw_win(self, o, W, H):
+        o.rect(0, 0, W, H, (10, 8, 6, 150))
+        o.text("YOU WIN", W / 2, H / 2 - 40, size=64, color=GOLD, center=True)
+        o.text(f"cleared in {self.model.moves} moves", W / 2, H / 2 + 26,
+               size=22, color=TEXT, center=True)
+        o.text("N: new deal    Esc: leave", W / 2, H / 2 + 80, size=18,
+               color=EMBER, center=True)
+
+    def on_event(self, etype, data, renderer, audio, banner):
+        if etype == "sol_draw":
+            audio.play("card_flip")
+        elif etype == "sol_move":
+            audio.play("card_place")
+        elif etype == "sol_home":
+            audio.play("card_place")
+            audio.play("powerup")               # keep the reward layer on top
+        elif etype == "sol_undo":
+            audio.play("card_flip")
+        elif etype == "sol_deal":
+            audio.play("card_shuffle")
+        elif etype == "sol_win":
+            audio.play("win")
+            banner("YOU WIN!", 3.0)
+
+
+def _in(px, py, x, y, w, h):
+    return x <= px < x + w and y <= py < y + h
+
+
+def create_run(mode, rng):
+    return SolitaireRun(mode, rng)

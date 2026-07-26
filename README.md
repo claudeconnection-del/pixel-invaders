@@ -63,6 +63,11 @@ Two categories on the cabinet menu (Left/Right on the CATEGORY row):
   Arrange baked sections into an 8-slot sequence and **export it as the actual in-game
   soundtrack** (`Settings -> Game music: CUSTOM`, or it flips automatically on export).
   Sequences persist in your profile; exports land in `usermusic/` as a `custom` music pool.
+- **Battleship** *(BOARD — secret local multiplayer)* — hidden fleets, two players in one
+  room, each on their **own phone** as a private controller while the cabinet is the shared
+  "TV." Scan the lobby QR to join, place your fleet privately, tap to fire. The cabinet shows
+  the public board + missile animations and never your ships. Rewatch from either player's
+  perspective afterwards. See [Secret local multiplayer](#secret-local-multiplayer-companion-phones).
 
 ![voxel studio](docs/screenshot_studio.png)
 
@@ -123,6 +128,22 @@ With the backend deployed (see [DEPLOY.md](DEPLOY.md)), every scored game gains 
 with a code. Everyone in the session plays **the same seeded run** — identical waves,
 levels, and spawns — and scores post to a live lobby standings board. Async by design:
 race now, let family beat your score after dinner. Sessions expire after 24h.
+
+### Secret local multiplayer (companion phones)
+
+Board games like **Battleship** support *truly-secret* local play: two people in the same
+room, with hidden information genuinely un-seeable by your opponent — and no second cabinet
+needed. Each player uses their **own phone** as a private controller; the cabinet is the
+shared screen. Pick Battleship (BOARD category) → **SECRET LOCAL**: the cabinet hosts a tiny
+web server (default port **1983**, auto-falls back if busy) and shows a **join QR + code**.
+Both phones join over the same wifi, place fleets privately, then tap to fire — the cabinet
+renders only the *public* board (shot pegs, sunk ships, missile arcs) and never a ship still
+afloat. Secrets live only on the owning phone and never leave the cabinet; no internet or
+home-box backend is required. Reconnect by re-opening the URL.
+
+After a match, press **R** to rewatch it from any perspective (**1/2/3** = P1 · P2 ·
+Director): each player's replay hides exactly what was hidden to *them* at that moment, so
+you can relive the bluff — or flip to the director's-eye view with both fleets revealed.
 
 ## Global leaderboards (the microservice)
 
@@ -194,6 +215,8 @@ python tools/test_meta.py         # stats/achievements/skins, profile migration
 python tools/smoke_test.py        # boots the real cabinet, plays every game
 python server/test_server.py      # API tests (needs: pip install httpx)
 python tools/test_integration.py  # real uvicorn server + the game's net client
+python tools/test_battleship.py   # Battleship rules, AI full game, serialisation
+python tools/test_companion.py    # secret-local: secrecy invariant, session, server, replay
 ```
 
 Regenerate assets after editing sprite grids or sound definitions:

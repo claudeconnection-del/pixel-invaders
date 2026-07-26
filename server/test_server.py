@@ -15,8 +15,21 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import server.app as app_mod  # noqa: E402
 from server import db  # noqa: E402
+from meta.replay import sign_replay  # noqa: E402
 
 client = TestClient(app_mod.app)
+
+
+def _make_replay(key, score=1234, seed=42, game="voxelhell", mode="campaign",
+                 frames=2):
+    data = {
+        "schema": 1, "game": game, "mode": mode, "seed": seed,
+        "analog": False, "score": score, "created": "2026-07-25T00:00:00",
+        "duration": round(0.016 * frames, 2),
+        "dts": [0.016] * frames, "masks": [0] * frames, "analog_data": [],
+    }
+    data["sig"] = sign_replay(data, key)
+    return data
 
 
 def test_health():
@@ -180,6 +193,176 @@ def test_matches():
     print("matches OK (create/join/turn-gate/version-conflict/poll/limits)")
 
 
+def test_replay_upload_list_fetch_roundtrip():
+    db.reset_for_tests()
+    app_mod.API_KEY = "sekrit"
+    try:
+        r = client.post("/api/v1/scores", headers={"X-Api-Key": "sekrit"},
+                        json={"game": "voxelhell", "mode": "campaign",
+                              "name": "ABC", "score": 1234})
+        assert r.status_code == 200, r.text
+
+        replay = _make_replay("sekrit", score=1234)
+        r = client.post("/replays", headers={"X-Api-Key": "sekrit"}, json={
+            "game": "voxelhell", "mode": "campaign", "name": "ABC",
+            "score": 1234, "replay": replay})
+        assert r.status_code == 200, r.text
+        replay_id = r.json()["id"]
+
+        r = client.get("/replays",
+                       params={"game": "voxelhell", "mode": "campaign"})
+        assert r.status_code == 200
+        entries = r.json()["replays"]
+        assert any(e["id"] == replay_id and e["name"] == "ABC"
+                   and e["score"] == 1234 for e in entries), entries
+
+        r = client.get(f"/replays/{replay_id}")
+        assert r.status_code == 200, r.text
+        fetched = r.json()
+        assert fetched["seed"] == 42 and fetched["score"] == 1234
+        assert fetched["sig"] == replay["sig"]
+
+        # never-submitted score: no matching entry to attach to
+        orphan = _make_replay("sekrit", score=999999)
+        r = client.post("/replays", headers={"X-Api-Key": "sekrit"}, json={
+            "game": "voxelhell", "mode": "campaign", "name": "ABC",
+            "score": 999999, "replay": orphan})
+        assert r.status_code == 409, r.status_code
+    finally:
+        app_mod.API_KEY = ""
+    print("replay upload/list/fetch round-trip OK")
+
+
+def test_replay_bad_signature_rejected():
+    db.reset_for_tests()
+    app_mod.API_KEY = "sekrit"
+    try:
+        r = client.post("/api/v1/scores", headers={"X-Api-Key": "sekrit"},
+                        json={"game": "voxelhell", "mode": "campaign",
+                              "name": "BAD", "score": 999})
+        assert r.status_code == 200
+
+        replay = _make_replay("wrong-key", score=999)
+        r = client.post("/replays", headers={"X-Api-Key": "sekrit"}, json={
+            "game": "voxelhell", "mode": "campaign", "name": "BAD",
+            "score": 999, "replay": replay})
+        assert 400 <= r.status_code < 500, r.status_code
+
+        tampered = _make_replay("sekrit", score=999)
+        tampered["score"] = 999000  # mutate after signing -> sig mismatch
+        r = client.post("/replays", headers={"X-Api-Key": "sekrit"}, json={
+            "game": "voxelhell", "mode": "campaign", "name": "BAD",
+            "score": 999, "replay": tampered})
+        assert 400 <= r.status_code < 500, r.status_code
+    finally:
+        app_mod.API_KEY = ""
+    print("bad signature rejected OK")
+
+
+def test_replay_oversize_rejected():
+    db.reset_for_tests()
+    app_mod.API_KEY = "sekrit"
+    try:
+        r = client.post("/api/v1/scores", headers={"X-Api-Key": "sekrit"},
+                        json={"game": "voxelhell", "mode": "campaign",
+                              "name": "BIG", "score": 42})
+        assert r.status_code == 200
+
+        replay = _make_replay("sekrit", score=42, frames=60000)
+        r = client.post("/replays", headers={"X-Api-Key": "sekrit"}, json={
+            "game": "voxelhell", "mode": "campaign", "name": "BIG",
+            "score": 42, "replay": replay})
+        assert r.status_code == 413, r.status_code
+    finally:
+        app_mod.API_KEY = ""
+    print("oversize replay rejected OK")
+
+
+def test_replay_retention_prunes_dropped_score():
+    db.reset_for_tests()
+    app_mod.API_KEY = "sekrit"
+    try:
+        ids = {}
+        for i in range(10):
+            score = 100 + i
+            name = f"P{i}"
+            r = client.post("/api/v1/scores", headers={"X-Api-Key": "sekrit"},
+                            json={"game": "voxelhell", "mode": "retention",
+                                  "name": name, "score": score})
+            assert r.status_code == 200, r.text
+        for i in range(10):
+            score = 100 + i
+            name = f"P{i}"
+            replay = _make_replay("sekrit", score=score, game="voxelhell",
+                                  mode="retention")
+            r = client.post("/replays", headers={"X-Api-Key": "sekrit"},
+                            json={"game": "voxelhell", "mode": "retention",
+                                  "name": name, "score": score,
+                                  "replay": replay})
+            assert r.status_code == 200, r.text
+            ids[score] = r.json()["id"]
+
+        before = client.get("/replays", params={
+            "game": "voxelhell", "mode": "retention"}).json()["replays"]
+        assert len(before) == 10
+
+        # a big new score bumps the lowest (100) off the top 10
+        r = client.post("/api/v1/scores", headers={"X-Api-Key": "sekrit"},
+                        json={"game": "voxelhell", "mode": "retention",
+                              "name": "TOP", "score": 5000})
+        assert r.status_code == 200
+
+        after = client.get("/replays", params={
+            "game": "voxelhell", "mode": "retention"}).json()["replays"]
+        after_ids = {e["id"] for e in after}
+        assert ids[100] not in after_ids, "dropped score's replay must be pruned"
+        assert len(after) == 9
+        for score in range(101, 110):
+            assert ids[score] in after_ids
+    finally:
+        app_mod.API_KEY = ""
+    print("retention prunes dropped-score replay OK")
+
+
+def test_replay_api_key_required():
+    db.reset_for_tests()
+    app_mod.API_KEY = "sekrit"
+    try:
+        r = client.post("/api/v1/scores", headers={"X-Api-Key": "sekrit"},
+                        json={"game": "voxelhell", "mode": "campaign",
+                              "name": "KEY", "score": 77})
+        assert r.status_code == 200
+
+        replay = _make_replay("sekrit", score=77)
+        r = client.post("/replays", json={
+            "game": "voxelhell", "mode": "campaign", "name": "KEY",
+            "score": 77, "replay": replay})
+        assert r.status_code == 401, r.status_code
+
+        r = client.post("/replays", headers={"X-Api-Key": "sekrit"}, json={
+            "game": "voxelhell", "mode": "campaign", "name": "KEY",
+            "score": 77, "replay": replay})
+        assert r.status_code == 200, r.text
+    finally:
+        app_mod.API_KEY = ""
+    print("replay upload requires api key OK")
+
+
+def test_score_submit_path_unaffected_by_replays():
+    db.reset_for_tests()
+    r = client.post("/api/v1/scores", json={
+        "game": "voxelhell", "mode": "campaign", "name": "OLD", "score": 42})
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body.keys()) == {"id", "rank"}, body
+    assert body["rank"] == 1
+    r = client.get("/api/v1/scores",
+                   params={"game": "voxelhell", "mode": "campaign"})
+    assert r.status_code == 200
+    assert any(s["name"] == "OLD" for s in r.json()["scores"])
+    print("old score-submit path unaffected OK")
+
+
 if __name__ == "__main__":
     test_health()
     test_submit_and_rank()
@@ -188,4 +371,10 @@ if __name__ == "__main__":
     test_boards_daily_scoreboard()
     test_sessions()
     test_matches()
+    test_replay_upload_list_fetch_roundtrip()
+    test_replay_bad_signature_rejected()
+    test_replay_oversize_rejected()
+    test_replay_retention_prunes_dropped_score()
+    test_replay_api_key_required()
+    test_score_submit_path_unaffected_by_replays()
     print("ALL SERVER TESTS PASSED")

@@ -6,9 +6,13 @@ top level; per-game progress under games.<game_id>.
 import copy
 import json
 import os
+import shutil
 import tempfile
+from datetime import datetime
 
 SCHEMA_VERSION = 2
+
+EXPORT_NAME = "cabinet_profile_export.json"
 
 GAME_SECTION_DEFAULT = {
     "selected_skin": "vanguard",
@@ -50,10 +54,44 @@ DEFAULT_PROFILE = {
         "mouse_sens": 1.0,        # look sensitivity multiplier (FPS games)
         "ghost": "personal",      # off | personal (race your best run's ghost)
         "game_music": "classic",  # classic | custom (Voxel Studio export)
+        "idle_screen": "attract",  # attract | ambient | off (menu idle behaviour)
+        "attract_star": "mixed",   # replays | cabinet_man | mixed (who stars attract)
+        "cabinet_man": True,       # master toggle for the summonable house player
+        "ambient_mode": "embers",  # default ambient preset id (built-in)
+        "ambient_sound": "preset",  # preset | silence (global ambient sound override)
+        # tabletop cosmetics — shared across the solo card/tabletop games
+        "tabletop": {
+            "deck": "classic",
+            "felt": "emberlight",
+            "unlocked_decks": [],   # cosmetic ids granted by achievements
+            "unlocked_felts": [],
+        },
         "player_name": "AAA",  # arcade initials
+        "share_replays": "ask",  # ask | always | never (share a qualifying run's replay)
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8083
     },
+    # Cabinet Man: cabinet-level achievement unlocks + counters (summons,
+    # longest unbroken watch) — backfilled by arcade.cabinet_man.cabinet_man_section
+    "cabinet_man": {
+        "achievements": {},        # id -> {"unlocked_at": iso8601}
+        "counters": {"summons": 0, "longest_watch": 0.0},
+    },
+    # ambient mode: last-used preset, custom save slots, mood counters, and the
+    # cabinet-level (mood) achievement unlocks
+    "ambient": {
+        "current": "embers",
+        "custom": [],          # AmbientPreset dicts (capped by the UI)
+        "achievements": {},    # id -> {"unlocked_at": iso8601}
+        "counters": {
+            "total_seconds": 0.0,   # lifetime seconds spent in ambient
+            "idle_entries": 0,      # lifetime auto (idle) entries
+            "manual_entries": 0,    # lifetime manual entries
+            "last_run_end_ts": 0.0,  # epoch of the last run end (take_a_break)
+        },
+    },
 }
+
+AMBIENT_DEFAULT = DEFAULT_PROFILE["ambient"]
 
 
 def default_path():
@@ -74,6 +112,20 @@ def game_section(profile, game_id):
     return section
 
 
+def ambient_section(profile):
+    """Fetch (creating/backfilling) the ambient sub-dict: last-used preset,
+    custom save slots, and the mood-achievement counters. Tolerant of old
+    saves that predate any of these keys."""
+    amb = profile.setdefault("ambient", copy.deepcopy(AMBIENT_DEFAULT))
+    amb.setdefault("current", AMBIENT_DEFAULT["current"])
+    amb.setdefault("custom", [])
+    amb.setdefault("achievements", {})
+    counters = amb.setdefault("counters", {})
+    for key, value in AMBIENT_DEFAULT["counters"].items():
+        counters.setdefault(key, value)
+    return amb
+
+
 def _migrate_v1(saved, profile):
     """v1 kept voxelhell's progress at the top level."""
     section = game_section(profile, "voxelhell")
@@ -86,16 +138,11 @@ def _migrate_v1(saved, profile):
         profile["leaderboard"].update(saved["leaderboard"])
 
 
-def load(path=None):
-    """Load the profile, merging defaults for any missing keys so old save
-    files keep working as the schema grows."""
-    path = path or default_path()
+def _from_saved(saved):
+    """Build a full profile from a parsed saved dict: migrate old versions and
+    backfill every missing default. The single merge path shared by load() and
+    import_profile()."""
     profile = copy.deepcopy(DEFAULT_PROFILE)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            saved = json.load(f)
-    except (OSError, ValueError):
-        return profile
     if not isinstance(saved, dict):
         return profile
 
@@ -106,12 +153,25 @@ def load(path=None):
         return profile
 
     for key, value in saved.items():
-        if key in ("settings", "leaderboard", "games") and isinstance(value, dict):
+        if key in ("settings", "leaderboard", "games", "ambient", "cabinet_man") \
+                and isinstance(value, dict):
             profile[key].update(value)
         elif key in profile:
             profile[key] = value
     profile["version"] = SCHEMA_VERSION
     return profile
+
+
+def load(path=None):
+    """Load the profile, merging defaults for any missing keys so old save
+    files keep working as the schema grows."""
+    path = path or default_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return copy.deepcopy(DEFAULT_PROFILE)
+    return _from_saved(saved)
 
 
 def save(profile, path=None):
@@ -126,3 +186,55 @@ def save(profile, path=None):
         os.replace(tmp_path, path)
     except OSError:
         pass  # saving is best-effort; never crash the game over it
+
+
+# --------------------------------------------------- export / import (CAB-27)
+def export_path():
+    """The fixed cabinet export filename, beside the profile (no file dialog —
+    a fixed path keeps migration cabinet-simple)."""
+    return os.path.join(os.path.dirname(default_path()), EXPORT_NAME)
+
+
+def export_profile(profile, path=None):
+    """Pretty-dump the profile (schema version included) to `path` (defaults to
+    the fixed export file). Returns the path on success, None on failure."""
+    path = path or export_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(profile, f, indent=2)
+        return path
+    except OSError:
+        return None
+
+
+def import_profile(path=None):
+    """Parse an exported profile file and backfill it to the current schema
+    (via the same merge as load()). Returns the profile dict, or None if the
+    file is missing or corrupt — so the caller can leave the current profile
+    untouched. An older-version or minimal export upgrades cleanly."""
+    path = path or export_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return None                 # missing or corrupt: signal failure
+    if not isinstance(saved, dict):
+        return None
+    return _from_saved(saved)
+
+
+def backup_profile(path=None):
+    """Copy the current profile file to a timestamped sibling before an import
+    replaces it. Returns the backup path, or None if there was nothing to back
+    up (fresh cabinet) or the copy failed."""
+    path = path or default_path()
+    if not os.path.exists(path):
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = os.path.join(os.path.dirname(path) or ".",
+                          f"profile.backup-{stamp}.json")
+    try:
+        shutil.copy2(path, backup)
+        return backup
+    except OSError:
+        return None

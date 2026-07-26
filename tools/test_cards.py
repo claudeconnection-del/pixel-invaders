@@ -1,0 +1,538 @@
+"""Headless tabletop tests: the card deck, the deck/felt skin registries, and
+the Klondike Solitaire rules. No pygame, no GL.
+
+Run: python tools/test_cards.py
+"""
+import os
+import random
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from games.cards import skins  # noqa: E402
+from games.cards.deck import Card, SUITS, make_deck, shuffle  # noqa: E402
+from games.solitaire.model import Solitaire  # noqa: E402
+
+
+def test_deck():
+    d = make_deck()
+    assert len(d) == 52 and len(set(d)) == 52
+    assert sum(1 for c in d if c.suit == "H") == 13
+    assert Card(1, "H").red and Card(1, "D").red
+    assert not Card(1, "S").red and not Card(1, "C").red
+    assert Card(1, "S").label == "AS"
+    assert Card(13, "H").label == "KH" and Card(10, "C").label == "10C"
+    # deterministic shuffle, and it actually reorders
+    a = shuffle(d, random.Random(5))
+    b = shuffle(d, random.Random(5))
+    assert a == b and a != d
+    print("deck OK")
+
+
+def test_skins():
+    free = skins.available_decks(set())
+    assert all(s.premium is None for s in free)
+    prem = [s for s in skins.DECKS if s.premium]
+    assert prem, "expected premium decks"
+    p = prem[0]
+    assert p.id not in {s.id for s in free}
+    assert p.id in {s.id for s in skins.available_decks({p.premium})}
+    # felts: dynamic ones expose their ambient scene id
+    assert skins.felt_by_id("galaxy").scene == "nebula"
+    assert skins.felt_by_id("classic_green").scene is None
+    # round-trip
+    assert skins.DeckSkin.from_dict(skins.DECKS[0].to_dict()) == skins.DECKS[0]
+    assert skins.FeltSkin.from_dict(skins.FELTS[0].to_dict()) == skins.FELTS[0]
+    print(f"skins OK ({len(skins.DECKS)} decks, {len(skins.FELTS)} felts, "
+          f"{len(prem)} premium decks)")
+
+
+def test_four_color_suit_ink():
+    from games.cards import render as card_render
+    from games.cards import table as card_table
+    light = skins.deck_by_id("classic")          # light face
+    dark = skins.deck_by_id("midnight")           # dark face (sum < 360)
+
+    # off: every suit matches the deck's own black/red inks exactly
+    for deck in (light, dark):
+        assert card_render.suit_ink(deck, "S", False) == list(deck.ink_black)
+        assert card_render.suit_ink(deck, "C", False) == list(deck.ink_black)
+        assert card_render.suit_ink(deck, "H", False) == list(deck.ink_red)
+        assert card_render.suit_ink(deck, "D", False) == list(deck.ink_red)
+
+    # on: spades/hearts unchanged; diamonds -> blue, clubs -> green, and both
+    # differ from the deck's own inks
+    for deck in (light, dark):
+        assert card_render.suit_ink(deck, "S", True) == list(deck.ink_black)
+        assert card_render.suit_ink(deck, "H", True) == list(deck.ink_red)
+        d_ink = card_render.suit_ink(deck, "D", True)
+        c_ink = card_render.suit_ink(deck, "C", True)
+        assert d_ink != list(deck.ink_black) and d_ink != list(deck.ink_red)
+        assert c_ink != list(deck.ink_black) and c_ink != list(deck.ink_red)
+        assert d_ink[2] > d_ink[0]        # diamond ink is blue-dominant
+        assert c_ink[1] > c_ink[0]        # club ink is green-dominant
+
+    # dark-faced decks get the lighter variants (brighter than the light-face ones)
+    assert sum(card_render.suit_ink(dark, "D", True)) > \
+        sum(card_render.suit_ink(light, "D", True))
+
+    # store backfills the toggle (default off)
+    store = card_table.tabletop_store({})
+    assert store["four_color"] is False
+    print("four-color suit_ink OK (off matches deck inks, on recolors D/C, "
+          "dark decks get light variants, store backfills)")
+
+
+def test_board_skins():
+    free = skins.available_boards(set())
+    assert all(s.premium is None for s in free)
+    assert len(free) >= 6
+    prem = [s for s in skins.BOARDS if s.premium]
+    assert len(prem) >= 2
+    p = prem[0]
+    assert p.id not in {s.id for s in free}
+    assert p.id in {s.id for s in skins.available_boards({p.premium})}
+    assert skins.board_by_id("emberlight_walnut").id == "emberlight_walnut"
+    assert skins.BoardSkin.from_dict(skins.BOARDS[0].to_dict()) == skins.BOARDS[0]
+    print(f"board skins OK ({len(skins.BOARDS)} boards, {len(prem)} premium)")
+
+
+def test_deal():
+    m = Solitaire().deal(random.Random(7))
+    total = sum(len(p["down"]) + len(p["up"]) for p in m.tableau)
+    assert total == 28
+    for i, p in enumerate(m.tableau):
+        assert len(p["up"]) == 1 and len(p["down"]) == i
+    assert len(m.stock) == 24 and m.cards_home == 0 and not m.won
+    allcards = [c for p in m.tableau for c in p["down"] + p["up"]] + m.stock
+    assert len(allcards) == 52 and len(set(allcards)) == 52
+    # deterministic from the seed
+    b = Solitaire().deal(random.Random(7))
+    assert [c.to_tuple() for c in m.stock] == [c.to_tuple() for c in b.stock]
+    print("deal OK")
+
+
+def test_stock_draw_recycle():
+    m = Solitaire(draw_count=1).deal(random.Random(1))
+    assert m.draw() and len(m.waste) == 1 and len(m.stock) == 23
+    while m.stock:
+        m.draw()
+    assert len(m.waste) == 24 and not m.stock
+    assert m.draw() and len(m.stock) == 24 and not m.waste  # recycled
+    # draw-3 moves three at a time
+    m3 = Solitaire(draw_count=3).deal(random.Random(1))
+    m3.draw()
+    assert len(m3.waste) == 3
+    print("stock draw + recycle OK")
+
+
+def test_move_rules_and_undo():
+    m = Solitaire()
+    m.tableau = [{"down": [Card(5, "S")], "up": [Card(1, "H")]}] + \
+                [{"down": [], "up": []} for _ in range(6)]
+    m.foundations = {s: [] for s in SUITS}
+    # ace to foundation, and the buried 5S auto-flips up
+    assert m.tableau_to_foundation(0)
+    assert m.tableau[0]["up"] == [Card(5, "S")] and not m.tableau[0]["down"]
+    assert m.cards_home == 1
+    # undo restores the exact prior state and counts the undo
+    assert m.undo() and m.undo_count == 1
+    assert m.tableau[0]["up"] == [Card(1, "H")] and m.tableau[0]["down"] == [Card(5, "S")]
+    assert m.cards_home == 0
+
+    # tableau run move: [6H,5S] onto a black 7 is legal; onto a red 7 is not
+    m.tableau = [{"down": [], "up": [Card(6, "H"), Card(5, "S")]},
+                 {"down": [], "up": [Card(7, "S")]},
+                 {"down": [], "up": [Card(7, "H")]}] + \
+                [{"down": [], "up": []} for _ in range(4)]
+    assert not m.tableau_to_tableau(0, 2, 2)          # 6H onto 7H: same colour
+    assert m.tableau_to_tableau(0, 2, 1)              # 6H onto 7S: ok
+    assert [c.to_tuple() for c in m.tableau[1]["up"]] == [(7, "S"), (6, "H"), (5, "S")]
+    assert not m.tableau[0]["up"]
+
+    # empty pile only accepts a King
+    m.tableau = [{"down": [], "up": [Card(13, "D")]},
+                 {"down": [], "up": [Card(9, "C")]}] + \
+                [{"down": [], "up": []} for _ in range(5)]
+    assert not m.tableau_to_tableau(1, 1, 2)          # 9C to empty: rejected
+    assert m.tableau_to_tableau(0, 1, 2)              # KD to empty: ok
+    print("move rules + undo OK")
+
+
+def test_collect_and_win():
+    m = Solitaire()
+    full = lambda s: [Card(r, s) for r in range(1, 14)]
+    m.foundations = {"S": full("S"), "H": full("H"), "D": full("D"),
+                     "C": [Card(r, "C") for r in range(1, 13)]}  # C up to Queen
+    m.tableau = [{"down": [], "up": [Card(13, "C")]}] + \
+                [{"down": [], "up": []} for _ in range(6)]
+    assert not m.won and m.cards_home == 51
+    moved = m.collect_to_foundations()
+    assert moved == 1 and m.won and m.cards_home == 52
+    print("collect + win OK")
+
+
+def test_tabletop_stats_rows():
+    from arcade.game_api import resolve_stats_rows
+    from games import games_in_category, load_games
+    games = load_games()
+    # every TABLETOP game has STATS_ROWS, and they resolve from a fresh (empty)
+    # lifetime dict with no KeyError (zero-state friendly)
+    for gid in games_in_category("TABLETOP"):
+        rows = getattr(games[gid], "STATS_ROWS", None)
+        assert rows, f"{gid} has no STATS_ROWS"
+        resolved = resolve_stats_rows(rows, {})     # empty lifetime
+        assert len(resolved) == len(rows)
+        assert all(isinstance(v, str) for _, v in resolved)
+
+    # solitaire rows resolve real values (incl. the best-time formatter + $bank)
+    import games.solitaire as sol
+    life = {"sol_games": 12, "sol_wins": 4, "sol_best_streak": 3,
+            "sol_streak": 1, "sol_best_time": 125, "sol_vegas_bank": -17,
+            "sol_vegas_deals": 5}
+    got = dict(resolve_stats_rows(sol.STATS_ROWS, life))
+    assert got["Games played"] == "12" and got["Wins"] == "4"
+    assert got["Best time"] == "2:05"          # mm:ss formatter
+    assert got["Vegas bankroll"] == "$-17"
+    print(f"tabletop stats rows OK ({len(games_in_category('TABLETOP'))} games, "
+          "resolver + formatters)")
+
+
+def test_tabletop_rules_text():
+    """Every registered TABLETOP game exports a non-empty RULES_TEXT with
+    lines under the render length cap."""
+    from games import games_in_category, load_games
+    games = load_games()
+    for gid in games_in_category("TABLETOP"):
+        module = games[gid]
+        rules = getattr(module, "RULES_TEXT", None)
+        assert rules, f"{gid} has no RULES_TEXT"
+        assert any(line.strip() for line in rules), f"{gid} RULES_TEXT all blank"
+        for line in rules:
+            assert len(line) <= 72, f"{gid} rules line too long: {line!r}"
+    print(f"tabletop rules text OK ({len(games_in_category('TABLETOP'))} games "
+          "have RULES_TEXT)")
+
+
+def test_vegas_rules():
+    # pass-limit refusal: draw-1 Vegas with 1 allowed recycle
+    m = Solitaire(draw_count=1, pass_limit=1).deal(random.Random(3))
+    # drain the stock to the waste
+    while m.stock:
+        assert m.draw()
+    assert m.recycles == 0
+    assert m.draw()                # first recycle allowed
+    assert m.recycles == 1
+    while m.stock:                 # drain again
+        m.draw()
+    assert not m.draw()            # second recycle refused (pass limit hit)
+    assert m.recycles == 1
+
+    # vegas_delta math incl. foundation take-back (+5 on, -5 off)
+    v = Solitaire(draw_count=3, pass_limit=3)
+    v.foundations = {"S": [Card(1, "S")], "H": [], "D": [], "C": []}
+    v.tableau = [{"down": [], "up": []} for _ in range(7)]
+    assert v.vegas_delta == 5                    # one card home
+    v.foundations["S"].append(Card(2, "S"))
+    assert v.vegas_delta == 10                   # two home
+    # take one back off onto a tableau (needs a valid landing: 2S is black,
+    # goes on a red 3) — simulate the take-off directly via cards_home
+    v.foundations["S"].pop()
+    assert v.vegas_delta == 5                     # back to one home (-$5)
+
+    # cumulative bank across two simulated deals via the game run's helpers
+    import games.solitaire.game as solgame
+    run = solgame.create_run("vegas", random.Random(5))
+    section = {"achievements": {}, "lifetime": {}, "unlocked_skins": []}
+    run.attach_profile(section, {}, lambda: None)
+    life = section["lifetime"]
+    assert run.vegas and life["sol_vegas_bank"] == -52   # opening buy-in
+    assert life["sol_vegas_deals"] == 1
+    # bank a few foundation cards, then deal again: buy-in stacks, gains keep
+    run.model.foundations["S"] = [Card(1, "S"), Card(2, "S")]
+    run._accrue_vegas()                           # accrues +$10 (per-frame diff)
+    assert life["sol_vegas_bank"] == -52 + 10
+    run._new_deal()                               # second deal: another -52
+    assert life["sol_vegas_deals"] == 2
+    assert life["sol_vegas_bank"] == -52 + 10 - 52
+    print("vegas rules OK (pass-limit refusal, delta math, cumulative bank)")
+
+
+def test_vegas_achievements():
+    from games.solitaire.achievements import ACHIEVEMENTS
+    by = {a.id: a for a in ACHIEVEMENTS}
+    assert by["vegas_in_black"].check(None, None,
+                                      {"sol_vegas_deals": 10, "sol_vegas_bank": 5}, {})
+    assert not by["vegas_in_black"].check(None, None,
+                                          {"sol_vegas_deals": 10, "sol_vegas_bank": -5}, {})
+    assert not by["vegas_in_black"].check(None, None,
+                                          {"sol_vegas_deals": 9, "sol_vegas_bank": 100}, {})
+    assert by["vegas_deals_50"].check(None, None, {"sol_vegas_deals": 50}, {})
+    assert by["vegas_deals_50"].progress({"sol_vegas_deals": 20}, {}) == (20, 50)
+    print("vegas achievements OK (in_black gated on deals+bank, deals_50 progress)")
+
+
+def test_solitaire_achievements():
+    from games.solitaire.achievements import ACHIEVEMENTS
+    by = {a.id: a for a in ACHIEVEMENTS}
+    assert by["first_win"].check("sol_win", None, {}, {})
+    assert not by["first_win"].check("sol_deal", None, {}, {})
+    assert by["speed_run"].check("sol_win", None, {}, {"time": 120})
+    assert not by["speed_run"].check("sol_win", None, {}, {"time": 999})
+    assert by["no_undo"].check("sol_win", None, {}, {"undos": 0})
+    assert not by["no_undo"].check("sol_win", None, {}, {"undos": 2})
+    assert by["streak_3"].check("sol_win", None, {"sol_streak": 3}, {})
+    assert not by["streak_3"].check("sol_win", None, {"sol_streak": 2}, {})
+    # grind milestones fire from counters alone (progress-checked every frame)
+    assert by["century"].check(None, None, {"sol_games": 100}, {})
+    assert not by["century"].check(None, None, {"sol_games": 99}, {})
+    assert by["millennium"].check(None, None, {"sol_games": 1000}, {})
+    assert by["founder"].check(None, None, {"sol_wins": 250}, {})
+    assert by["century"].progress({"sol_games": 40}, {}) == (40, 100)
+    assert by["millennium"].progress({"sol_games": 5000}, {}) == (1000, 1000)
+    print(f"solitaire achievements OK ({len(ACHIEVEMENTS)} incl. grind)")
+
+
+def test_tweens():
+    from games.cards.table import Tweens
+
+    tw = Tweens()
+    # no tween registered: pos is just a pass-through
+    assert tw.pos("k", (5, 5), 1.0) == (5, 5)
+
+    # start/mid/end interpolation, out-cubic easing (front-loaded motion)
+    tw.add("a", (0, 0), (100, 200), 0.10, now=1.0)
+    assert tw.pos("a", (999, 999), 1.0) == (0, 0)                  # t=start: from_xy
+    mid_x, mid_y = tw.pos("a", (999, 999), 1.05)                   # t=start+half
+    assert 50 < mid_x < 100 and 100 < mid_y < 200                  # past linear midpoint
+    assert len(tw) == 1
+    # expiry: past the duration, cleans up and falls back to the caller's
+    # current logical position (which may differ from the tween's to_xy)
+    assert tw.pos("a", (101, 201), 1.11) == (101, 201)
+    assert len(tw) == 0
+
+    # a tween added for a future start renders at from_xy until it begins
+    # (deal-cascade stagger: card N's flight starts N*delay after the others)
+    tw.add("b", (10, 10), (10, 90), 0.10, now=2.0, delay=0.05)
+    assert tw.pos("b", (999, 999), 2.02) == (10, 10)               # not started yet
+    assert len(tw) == 1
+    x, y = tw.pos("b", (999, 999), 2.10)                           # mid-flight
+    assert 10 <= x <= 10 and 10 < y < 90
+
+    # dur<=0 (low-motion setting) is a no-op: nothing is ever tracked
+    tw2 = Tweens()
+    tw2.add("c", (0, 0), (50, 50), 0.0, now=0.0)
+    assert len(tw2) == 0
+    assert tw2.pos("c", (7, 8), 0.0) == (7, 8)
+
+    # >MAX_LIVE concurrent flights degrade: newest overflow is dropped, so it
+    # renders instantly at the caller's logical position instead of piling up
+    tw3 = Tweens()
+    for i in range(Tweens.MAX_LIVE):
+        tw3.add(f"card{i}", (0, 0), (10, 10), 0.2, now=0.0)
+    assert len(tw3) == Tweens.MAX_LIVE
+    tw3.add("overflow", (0, 0), (10, 10), 0.2, now=0.0)
+    assert len(tw3) == Tweens.MAX_LIVE                              # unchanged
+    assert tw3.pos("overflow", (3, 4), 0.0) == (3, 4)                # instant
+    # re-adding an already-live key is never blocked by the cap
+    tw3.add("card0", (0, 0), (20, 20), 0.2, now=0.0)
+    assert len(tw3) == Tweens.MAX_LIVE
+    print("tweens OK (easing math, expiry, deferred start, low-motion no-op, "
+          "concurrency degrade)")
+
+
+def test_pad_cursor():
+    from games.cards.table import PadCursor
+
+    # a 3x3 grid of targets, ids "r{row}c{col}", 100px apart
+    grid = {}
+    for r in range(3):
+        for c in range(3):
+            grid[f"r{r}c{c}"] = (c * 100, r * 100, 80, 80)
+
+    class _Host:
+        def __init__(self):
+            self.sel = "something"
+            self.clicked = None
+        def pad_targets(self):
+            return [(tid, x, y, w, h) for tid, (x, y, w, h) in grid.items()]
+        def _click(self, x, y):
+            self.clicked = (x, y)
+
+    host = _Host()
+    pc = PadCursor(host)
+    assert not pc.visible
+    # first step with nothing selected yet lands on the first target
+    pc.step("right")
+    assert pc.target_id == "r0c0" and pc.visible
+
+    # stepping right/left/up/down moves to the nearest target in that
+    # halfplane from the center column/row
+    pc.target_id = "r1c1"
+    pc.step("right")
+    assert pc.target_id == "r1c2"
+    pc.step("left")
+    assert pc.target_id == "r1c1"
+    pc.step("up")
+    assert pc.target_id == "r0c1"
+    pc.step("down")
+    assert pc.target_id == "r1c1"
+
+    # no-wrap: at the rightmost column, stepping right further stays put
+    pc.target_id = "r1c2"
+    pc.step("right")
+    assert pc.target_id == "r1c2", "must not wrap to the far side"
+    pc.target_id = "r0c0"
+    pc.step("up")
+    assert pc.target_id == "r0c0", "must not wrap to the far side"
+
+    # confirm dispatches host._click at the target's center
+    pc.target_id = "r0c1"
+    pc.confirm()
+    assert host.clicked == (140.0, 40.0)   # (100+80/2, 0+80/2)
+
+    # clear() clears the host's own selection state
+    pc.clear()
+    assert host.sel is None
+
+    # mouse motion hides the cursor without touching which target it's on
+    pc.visible = True
+    pc.hide()
+    assert not pc.visible and pc.target_id == "r0c1"
+
+    # an empty target list is a no-op, never raises
+    empty_host = _Host()
+    empty_host.pad_targets = lambda: []
+    pc2 = PadCursor(empty_host)
+    pc2.step("right")
+    pc2.confirm()
+    assert pc2.target_id is None and empty_host.clicked is None
+    print("pad cursor OK (halfplane stepping, no-wrap, confirm/clear, "
+          "hide, empty-target no-op)")
+
+
+def test_solitaire_tween_wiring():
+    import games.solitaire.game as solgame
+
+    # a fresh deal queues a staggered cascade for the dealt cards, capped at
+    # MAX_LIVE concurrent flights (28 dealt > 24 cap: the tail lands instantly)
+    run = solgame.create_run("draw1", random.Random(9))
+    run.attach_profile({"achievements": {}, "lifetime": {}, "unlocked_skins": []},
+                       {}, lambda: None)
+    assert len(run.tweens) == solgame.table.Tweens.MAX_LIVE
+
+    # let the cascade finish, then a stock draw queues exactly one flight
+    run.tweens = solgame.table.Tweens()
+    assert run.model.draw()
+    run._queue_draw_tween()
+    assert len(run.tweens) == 1
+
+    # a tableau->tableau run move queues one flight per moved card, and the
+    # landing position matches the destination column's post-move slot
+    run.tweens = solgame.table.Tweens()
+    run.model.tableau = [{"down": [], "up": [Card(6, "H"), Card(5, "S")]},
+                         {"down": [], "up": [Card(7, "S")]}] + \
+                        [{"down": [], "up": []} for _ in range(5)]
+    run.sel = {"kind": "tableau", "col": 0, "count": 2}
+    run._drop(("tableau", 1))
+    assert len(run.tweens) == 2
+    dest_x = run._col_x(1)
+    dest_ys = run._col_ys(1)
+    for i, card in enumerate((Card(6, "H"), Card(5, "S"))):
+        to_xy = run.tweens._live[(card.rank, card.suit)][1]     # [from,to,...]
+        assert to_xy == (dest_x, dest_ys[1 + i]), (card, to_xy, dest_ys)
+
+    # the low-motion setting is a hard no-op: nothing gets queued anywhere
+    run.settings["particles"] = "low"
+    run.tweens = solgame.table.Tweens()
+    run.model.tableau = [{"down": [], "up": [Card(13, "D")]},
+                         {"down": [], "up": []}] + \
+                        [{"down": [], "up": []} for _ in range(5)]
+    run.sel = {"kind": "tableau", "col": 0, "count": 1}
+    run._drop(("tableau", 1))
+    assert len(run.tweens) == 0
+    print("solitaire tween wiring OK (deal cascade, draw, run move, "
+          "low-motion no-op)")
+
+
+def test_solitaire_pad_cursor_wiring():
+    import games.solitaire.game as solgame
+
+    run = solgame.create_run("draw1", random.Random(3))
+    run.attach_profile({"achievements": {}, "lifetime": {}, "unlocked_skins": []},
+                       {}, lambda: None)
+
+    targets = run.pad_targets()
+    ids = [t[0] for t in targets]
+    assert ids[0] == "stock" and ids[1] == "waste"
+    assert ("foundation", "S") in ids
+    assert ("tableau", 0) in ids and ("tableau", 6) in ids
+    assert len(targets) == 2 + 4 + 7
+
+    # confirm on the stock target draws a card, exactly like a mouse click
+    run.pad_cursor.target_id = "stock"
+    before_waste = len(run.model.waste)
+    run.pad_cursor.confirm()
+    assert len(run.model.waste) == before_waste + 1
+
+    # a modal (the skin picker) takes the board's attention: no targets,
+    # so the cursor can't act until it closes
+    run.picker.open = True
+    assert run.pad_targets() == []
+    run.picker.open = False
+    assert run.pad_targets() != []
+    print("solitaire pad cursor wiring OK (targets, confirm dispatches "
+          "_click, modal gating)")
+
+
+def test_autocomplete_and_double_click():
+    import games.solitaire.game as solgame
+    run = solgame.create_run("draw1", random.Random(1))
+    assert not run._solvable()                 # face-down cards at deal
+    # double-click sends the obvious card home: Ace of spades on the waste
+    run.model.foundations = {s: [] for s in SUITS}
+    run.model.waste = [Card(1, "S")]
+    assert run._auto_home(("waste",)) and run.model.foundations["S"] == [Card(1, "S")]
+
+    # contrive a solved board (nothing face-down, one card left to place)
+    run.model.foundations = {"S": [Card(r, "S") for r in range(1, 13)],  # up to Q
+                             "H": [Card(r, "H") for r in range(1, 14)],
+                             "D": [Card(r, "D") for r in range(1, 14)],
+                             "C": [Card(r, "C") for r in range(1, 14)]}
+    run.model.tableau = [{"down": [], "up": [Card(13, "S")]}] + \
+                        [{"down": [], "up": []} for _ in range(6)]
+    run.model.stock, run.model.waste = [], []
+    run.won_flag = False
+    assert run._solvable()
+    steps = 0
+    while not run.model.won and steps < 80:
+        assert run._auto_step() is not None    # always progresses
+        steps += 1
+    assert run.model.won and not run._solvable()
+    print("autocomplete + double-click OK")
+
+
+def main():
+    test_deck()
+    test_skins()
+    test_four_color_suit_ink()
+    test_board_skins()
+    test_deal()
+    test_stock_draw_recycle()
+    test_move_rules_and_undo()
+    test_collect_and_win()
+    test_tabletop_stats_rows()
+    test_tabletop_rules_text()
+    test_vegas_rules()
+    test_vegas_achievements()
+    test_solitaire_achievements()
+    test_tweens()
+    test_pad_cursor()
+    test_solitaire_tween_wiring()
+    test_solitaire_pad_cursor_wiring()
+    test_autocomplete_and_double_click()
+    print("ALL CARD TESTS PASSED")
+
+
+if __name__ == "__main__":
+    main()

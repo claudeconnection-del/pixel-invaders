@@ -65,6 +65,26 @@ def main():
             render_frame()
     print(f"cabinet screens OK for {GAME_IDS}")
 
+    # cabinet-wide completion roll-up reflects a real unlock (CAB-26)
+    from meta import completion as completion_mod
+    comp0 = completion_mod.completion(app.profile, app.games)
+    e0, tot = comp0["total"]
+    assert tot > 0 and "CABINET" in completion_mod.completion_line(comp0)
+    a0 = comp0["per_game"]["serpent"][0]
+    profile_mod.game_section(app.profile, "serpent")["achievements"]["__smoke__"] = {}
+    # unknown ids must NOT inflate earned past the module's own set
+    assert completion_mod.completion(app.profile, app.games)["per_game"]["serpent"][0] == a0
+    real = next(a.id for a in app.games["serpent"].ACHIEVEMENTS
+                if a.id not in profile_mod.game_section(app.profile, "serpent")["achievements"])
+    profile_mod.game_section(app.profile, "serpent")["achievements"][real] = {}
+    comp1 = completion_mod.completion(app.profile, app.games)
+    assert comp1["total"][0] == e0 + 1, (comp1["total"], e0)
+    # cleanup so later assertions see a pristine serpent section
+    sec = profile_mod.game_section(app.profile, "serpent")["achievements"]
+    sec.pop("__smoke__", None)
+    sec.pop(real, None)
+    print(f"cabinet completion OK ({e0}/{tot} rolled up, unknown ids ignored)")
+
     # menu nav regression: Down from PLAY must move even when HANGAR/SCORES
     # are hidden (studio), and category carousel must switch game groups
     from games import category_of
@@ -95,7 +115,28 @@ def main():
         app.settings_index = idx
         app.adjust_setting(idx, 1)
         render_frame()
-    print("settings adjustments OK")
+
+    # profile export / import action rows (CAB-27): export writes a file, then
+    # import confirms on the second press and swaps the profile back in.
+    import meta.profile as _pm
+    export_idx = next(i for i, r in enumerate(game_main.SETTINGS_ROWS)
+                      if r[1] == "export_profile")
+    import_idx = export_idx + 1
+    app.profile["settings"]["player_name"] = "SMK"
+    app.settings_index = export_idx
+    app.adjust_setting(export_idx, 1)                # export
+    render_frame()
+    assert os.path.exists(_pm.export_path()), "export did not write a file"
+    app.profile["settings"]["player_name"] = "AAA"   # change since export
+    app.settings_index = import_idx
+    app.adjust_setting(import_idx, 1)                # arm (first press)
+    assert app._import_armed
+    app.adjust_setting(import_idx, 1)                # confirm (second press)
+    assert not app._import_armed
+    assert app.profile["settings"]["player_name"] == "SMK"   # imported value
+    render_frame()
+    os.remove(_pm.export_path())                      # clean up the fixture
+    print("settings adjustments OK (incl. profile export/import)")
 
     # music sequencer: pools discovered, sections shuffle without repeats
     for pool, minimum in (("menu", 3), ("game", 6), ("boss", 2)):
@@ -244,10 +285,47 @@ def main():
     from meta.leaderboard import entries
     board = entries(app.profile, "voxelhell", "campaign")
     assert len(board) == 1 and board[0]["score"] > 0
+
+    # replay share prompt (CAB-15): default "ask" pref offers to share the
+    # run's replay right on the leaderboard screen.
+    assert app.share_prompt is not None, "share prompt should appear (default: ask)"
+    assert app.share_prompt[0] == "voxelhell" and app.share_prompt[1] == app.run_mode
+    render_frame()                          # exercise the share-prompt draw path
+
+    # outbox visibility (CAB-28): with the server unreachable (no base_url in
+    # smoke), queued scores stay pending; the leaderboard surfaces the count +
+    # R retries them.
+    import meta.outbox as _ob
+    assert not app.net.available            # smoke runs offline (empty server_url)
+    app.profile["outbox"] = []              # start from a clean queue
+    app.outbox.inflight.clear()
+    app.state = game_main.LEADERBOARD
+    app.outbox.queue_score("voxelhell", "campaign", "AAA", 123)
+    app.outbox.queue_score("voxelhell", "campaign", "BBB", 456)
+    pend = _ob.pending_count(app.profile)
+    assert pend == 2, f"expected 2 pending, got {pend}"
+    assert _ob.status_line(pend, False)     # non-empty status line
+    render_frame()                          # draws the pending status line
+    app.handle_keydown(pygame.K_r)          # retry now (offline -> stays queued)
+    render_frame()
+    assert app.wave_banner is not None      # retry feedback banner
+    banner_text = app.wave_banner[0].lower()
+    assert "queued" in banner_text or "offline" in banner_text or \
+        "retrying" in banner_text, banner_text
+    assert _ob.pending_count(app.profile) == 2   # still queued while offline
+    # the R keypress must fall through to the retry path untouched — a share
+    # prompt (still pending here) is an overlay hint, not an input trap
+    assert app.share_prompt is not None, "R must not consume the share prompt"
+
+    # accepting the prompt arms the pending share (queued once its score
+    # outbox item syncs — needs a reachable server, so it just stays armed
+    # here); declining (or leaving) clears it without side effects.
+    app.handle_keydown(pygame.K_y)
+    assert app.share_prompt is None and app._pending_share is not None
     app.handle_keydown(pygame.K_ESCAPE)
     assert app.state == game_main.MENU
     print(f"initials + leaderboard OK (entry={board[0]['name']} "
-          f"{board[0]['score']})")
+          f"{board[0]['score']}, {pend} pending surfaced, replay share armed)")
 
     # replay theater: browse the saved replay and watch it back in-engine.
     # Re-sim playback must advance the run and stay a read-only spectator view
@@ -255,8 +333,15 @@ def main():
     app.game_id = "voxelhell"
     app.open_replays()
     assert app.state == game_main.REPLAYS
+    assert app.replay_tab == "local"
     assert app.replays_list, "replay browser found no replays"
     render_frame()                          # exercise the browser draw path
+
+    # SHARED tab (CAB-15): offline (no server configured in smoke), so the
+    # Left/Right toggle is gated off entirely — screen still renders fine.
+    app.handle_keydown(pygame.K_RIGHT)
+    assert app.replay_tab == "local", "tab must not switch while offline"
+    render_frame()
     app.handle_keydown(pygame.K_RETURN)     # watch the newest replay
     assert app.state == game_main.REPLAYING
     for _ in range(60 * 6):                 # up to 6s of playback
@@ -292,6 +377,469 @@ def main():
     app.handle_keydown(pygame.K_SPACE)
     assert app.state == game_main.MENU
     print("attract mode OK")
+
+    # Cabinet Man attract star: forcing the setting makes a live pilot star the
+    # idle cycle (persona caption on), and it stays a throwaway — no profile
+    # writes while a pilot demo plays (E1 integrity in attract).
+    import copy as _copy
+    app.profile["settings"]["attract_star"] = "cabinet_man"
+    app.profile["settings"]["cabinet_man"] = True
+    starred_pilot = False
+    for _ in range(8):                       # cycle until a pilot-eligible game stars
+        app.start_attract()
+        if app.attract_is_pilot:
+            starred_pilot = True
+            break
+    assert starred_pilot, "cabinet_man attract star never fielded a live pilot"
+    assert app.attract_pilot is not None
+    profile_before = _copy.deepcopy(app.profile)
+    for _ in range(180):                     # ~3s of live pilot attract play
+        app.update_attract(dt)
+        render_frame()
+        if app.state != game_main.ATTRACT:
+            break
+    assert app.profile == profile_before, "attract pilot wrote to the profile"
+    app.handle_keydown(pygame.K_SPACE)
+    assert app.state == game_main.MENU
+    print(f"cabinet man attract star OK (pilot starred {app.attract_gid}, "
+          f"no profile writes)")
+
+    # ambient mode: manual entry (F2), draw the scene + overlay, any-key exit;
+    # then the idle-screen routing that fades a quiet menu into ambient
+    app.game_id = "voxelhell"
+    app.state = game_main.MENU
+    amb = profile_mod.ambient_section(app.profile)
+    manual_before = amb["counters"]["manual_entries"]
+    app.handle_keydown(pygame.K_F2)
+    assert app.state == game_main.AMBIENT and not app.entered_auto
+    for _ in range(30):
+        app.update_ambient(dt)
+        render_frame()               # exercises ambient 3D + overlay draw
+    assert amb["counters"]["manual_entries"] == manual_before + 1
+    assert app.ambient_session > 0 and amb["counters"]["total_seconds"] > 0
+
+    # customization panel (manual only): open, tweak, save a custom slot, close
+    app.handle_keydown(pygame.K_TAB)
+    assert app.ambient_edit
+    app.handle_keydown(pygame.K_DOWN)     # select a field
+    app.handle_keydown(pygame.K_RIGHT)    # change its value (applies live)
+    render_frame()                        # draws the panel
+    custom_before = len(amb["custom"])
+    app.handle_keydown(pygame.K_RETURN)   # save as custom slot
+    assert len(amb["custom"]) == custom_before + 1
+    assert amb["current"] == amb["custom"][-1]["id"]
+    app.handle_keydown(pygame.K_TAB)      # close panel, stay in ambient
+    assert not app.ambient_edit and app.state == game_main.AMBIENT
+
+    app.handle_keydown(pygame.K_SPACE)   # any key returns to the menu
+    assert app.state == game_main.MENU
+
+    from ambient.preset import idle_target
+    assert idle_target("attract") == "attract"
+    assert idle_target("ambient") == "ambient"
+    assert idle_target("off") is None
+    app.profile["settings"]["idle_screen"] = "ambient"
+    idle_before = amb["counters"]["idle_entries"]
+    app.start_ambient(auto=True)          # what the MENU idle hook now does
+    assert app.state == game_main.AMBIENT and app.entered_auto
+    render_frame()                        # auto path draws the faint hint
+    assert amb["counters"]["idle_entries"] == idle_before + 1
+    app.handle_keydown(pygame.K_RETURN)
+    assert app.state == game_main.MENU
+
+    # sound: generated beds form a discoverable 'ambient' pool; a bed-backed
+    # preset routes there (silence / music:<pool> handled the same way)
+    assert len(app.audio.pools.get("ambient", [])) == 2, "ambient beds missing"
+    amb["current"] = "fireplace"          # its default sound is bed:ambient
+    app.start_ambient(auto=False)
+    assert app.audio.current_pool == "ambient", "bed preset did not play the pool"
+    app.handle_keydown(pygame.K_SPACE)
+    assert app.state == game_main.MENU
+
+    # premium unlock gating: Supernova is hidden until Voxel Hell's boss_slayer
+    # achievement is earned, then it appears
+    assert "supernova" not in {p.id for p in app._ambient_presets()}
+    profile_mod.game_section(app.profile, "voxelhell")["achievements"][
+        "boss_slayer"] = {"unlocked_at": "x"}
+    assert "supernova" in {p.id for p in app._ambient_presets()}
+
+    # mood achievement: ten unbroken minutes earns Deep Breath
+    app.start_ambient(auto=False)
+    app.ambient_session = 601
+    app._check_ambient_achievements(amb)
+    assert "deep_breath" in amb["achievements"]
+    app.handle_keydown(pygame.K_SPACE)
+    assert app.state == game_main.MENU
+    print(f"ambient mode OK (manual + idle + bed + premium gate + mood, "
+          f"{amb['counters']['total_seconds']:.1f}s)")
+
+    # solitaire (TABLETOP): deal, draw the felt+cards, autoplay, new deal, and a
+    # scripted win overlay; leaves cleanly via pause -> quit
+    app.game_id = "solitaire"
+    app.state = game_main.MENU
+    app.start_run("draw1")
+    assert app.state == game_main.PLAYING and len(app.run.model.stock) == 24
+    sr = app.run
+    for _ in range(4):
+        app.gameplay_input = lambda: InputState()
+        app.update_playing(dt)
+        render_frame()                      # exercises felt + card draw
+    sr.handle_key(pygame.K_SPACE)           # autoplay to foundations
+    sr.handle_key(pygame.K_n)               # fresh deal
+    assert sr.model.cards_home == 0 and len(sr.model.stock) == 24
+
+    # gamepad cursor (CAB-23): D-pad steps between targets, A confirms via
+    # the same _click path a mouse would use, B clears the selection, and
+    # mouse motion hides the cursor again. Synthesize pad input the way
+    # smoke already synthesizes keys/clicks.
+    assert len(sr.pad_targets()) == 2 + 4 + 7   # stock+waste+4 foundations+7 cols
+    app.pad_state = lambda: (1.0, 0.0, False, False, 0.0)   # d-pad right
+    app.pad_nav_cooldown = 0.0
+    app.poll_pad_cursor(dt)
+    assert sr.pad_cursor.visible and sr.pad_cursor.target_id == "stock"
+    before_waste = len(sr.model.waste)
+    app.handle_pad_button(0)                # A: confirm -> draws a card
+    assert len(sr.model.waste) == before_waste + 1
+    sr.sel = "not none"
+    app.handle_pad_button(1)                # B: clears the selection
+    assert sr.sel is None
+    sr.pad_cursor.visible = True
+    app._mouse_moved = True                 # simulate mouse motion this frame
+    app.update_playing(dt)
+    assert not sr.pad_cursor.visible, "mouse motion must hide the pad cursor"
+    app._mouse_moved = False
+    del app.pad_state                       # restore the real (joystick-backed) method
+    print("solitaire pad cursor OK (step, confirm draws a card, "
+          "B clears, mouse motion hides)")
+
+    # skin picker (shared table.SkinPicker): TAB opens; cycle deck + felt
+    sr.handle_key(pygame.K_TAB)
+    assert sr.picker.open
+    deck0 = sr.deck.id
+    sr.handle_key(pygame.K_RIGHT)           # next deck
+    sr.handle_key(pygame.K_DOWN)            # to the felt row
+    felt0 = sr.felt.id
+    sr.handle_key(pygame.K_RIGHT)           # next felt
+    render_frame()                          # draws the panel + live preview
+    assert sr.deck.id != deck0 and sr.felt.id != felt0
+    tt = app.profile["settings"]["tabletop"]
+    assert tt["deck"] == sr.deck.id and tt["felt"] == sr.felt.id
+    # four-color accessibility toggle (third picker row)
+    sr.handle_key(pygame.K_DOWN)            # to the Four-color row
+    assert not sr.four_color
+    sr.handle_key(pygame.K_RIGHT)           # toggle on
+    render_frame()                          # preview redraws with 4-color ink
+    assert sr.four_color and tt["four_color"] is True
+    sr.handle_key(pygame.K_TAB)
+    assert not sr.picker.open
+
+    # rules overlay (H): opens, renders, closes; mutually exclusive with picker
+    sr.handle_key(pygame.K_TAB)             # open the picker first
+    assert sr.picker.open
+    sr.handle_key(pygame.K_h)               # H closes the picker + opens rules
+    assert sr.rules.open and not sr.picker.open
+    render_frame()                          # draws the rules panel
+    sr.handle_key(pygame.K_h)               # H closes it
+    assert not sr.rules.open
+
+    from games.cards.deck import Card
+    full = lambda s: [Card(r, s) for r in range(1, 14)]
+    sr.model.foundations = {"S": full("S"), "H": full("H"), "D": full("D"),
+                            "C": [Card(r, "C") for r in range(1, 13)]}
+    sr.model.tableau = [{"down": [], "up": [Card(13, "C")]}] + \
+                       [{"down": [], "up": []} for _ in range(6)]
+    sr.model.stock, sr.model.waste = [], []
+    assert sr._solvable()                   # no face-down cards -> auto-complete
+    app.handle_keydown(pygame.K_SPACE)      # solved board -> starts auto-complete
+    assert sr.autocompleting
+    app.gameplay_input = lambda: InputState()
+    for _ in range(6):                      # auto-complete plays out to a win
+        app.update_playing(dt)
+        if sr.model.won:
+            break
+    assert sr.model.won and sr.won_flag and not sr.autocompleting
+    render_frame()                          # draws the win overlay
+    sol_sec = profile_mod.game_section(app.profile, "solitaire")
+    assert "first_win" in sol_sec["achievements"] and sol_sec["lifetime"]["sol_wins"] >= 1
+    app.update_playing(dt)                  # per-frame sync grants the cosmetic
+    assert "ember_royale" in app.profile["settings"]["tabletop"]["unlocked_decks"]
+    app.handle_keydown(pygame.K_ESCAPE)     # pause
+    app.handle_keydown(pygame.K_q)          # quit to menu
+    assert app.state == game_main.MENU
+    print(f"solitaire OK (play / skins / auto-complete win + unlock, "
+          f"{sol_sec['lifetime']['sol_games']} games)")
+
+    # solitaire VEGAS mode (CAB-22): buy-in on deal, bank tracks foundation
+    # gains, pass limit enforced, bankroll cumulative across deals.
+    app.game_id = "solitaire"
+    app.state = game_main.MENU
+    app.start_run("vegas")
+    vr = app.run
+    assert vr.vegas and vr.model.pass_limit == 3 and vr.draw_count == 3
+    vlife = profile_mod.game_section(app.profile, "solitaire")["lifetime"]
+    assert vlife["sol_vegas_bank"] == -52          # opening buy-in
+    vr.model.foundations["S"] = [Card(1, "S"), Card(2, "S"), Card(3, "S")]
+    app.gameplay_input = lambda: InputState()
+    app.update_playing(dt)                          # accrues +$15
+    render_frame()                                  # draws the BANK readout
+    assert vlife["sol_vegas_bank"] == -52 + 15
+    vr.handle_key(pygame.K_n)                        # new deal: another -52
+    assert vlife["sol_vegas_deals"] == 2 and vlife["sol_vegas_bank"] == -52 + 15 - 52
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print(f"solitaire vegas OK (bank ${vlife['sol_vegas_bank']}, "
+          f"{vlife['sol_vegas_deals']} deals)")
+
+    # gin rummy (TABLETOP): deal, draw the table, drive human + house AI turns
+    # until a hand resolves; exercises the meld engine, render, and result screen
+    from games.rummy.model import deadwood as rm_dead
+    app.game_id = "rummy"
+    app.state = game_main.MENU
+    app.start_run("gin")
+    assert app.state == game_main.PLAYING
+    rr = app.run
+    app.gameplay_input = lambda: InputState()
+    rr.handle_key(pygame.K_h)               # rules overlay opens + renders
+    assert rr.rules.open
+    render_frame()
+    rr.handle_key(pygame.K_h)               # and closes
+    assert not rr.rules.open
+    app.update_playing(dt)                  # one real update tick (P1's turn)
+    for _ in range(80):
+        m = rr.model
+        if m.hand_over:
+            break
+        if m.turn == "P1":
+            if m.phase == "draw":
+                m.draw("stock")
+            else:
+                worst = min(m.hands["P1"],
+                            key=lambda c: rm_dead([x for x in m.hands["P1"] if x is not c]))
+                knock = rm_dead([x for x in m.hands["P1"] if x is not worst]) <= 10
+                m.discard_card(worst, knock=knock)
+                if m.hand_over:
+                    rr._announce()
+        else:
+            rr._house_turn()
+        render_frame()                      # exercises felt + hands + piles draw
+    assert all(len(rr.model.hands[p]) == 10 for p in ("P1", "P2"))
+    if rr.model.hand_over:
+        assert rr.model.result is not None
+        render_frame()                      # draws the hand-result overlay
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print(f"gin rummy OK (hand_over={rr.model.hand_over}, "
+          f"scores={rr.model.scores})")
+
+    # video poker (TABLETOP): deal, toggle a hold, draw, exercise the bet
+    # controls + rebuy path, and the table/paytable render.
+    import games.poker.game as poker_game
+    app.game_id = "poker"
+    app.state = game_main.MENU
+    app.start_run("jacks")
+    assert app.state == game_main.PLAYING
+    pr = app.run
+    app.gameplay_input = lambda: InputState()
+    credits0 = pr.model.credits
+    app.handle_keydown(pygame.K_RIGHT)          # bet 1 -> 2
+    assert pr.model.bet == 2
+    app.handle_keydown(pygame.K_d)               # deal
+    assert pr.model.phase == "hold" and pr.model.credits == credits0 - 2
+    render_frame()                               # exercises hand + paytable draw
+    app.handle_keydown(pygame.K_1)                # hold card 0
+    assert pr.model.held[0]
+    app.handle_keydown(pygame.K_d)                # draw
+    assert pr.model.phase == "paid" and pr.model.last_result is not None
+    render_frame()                                # winning-row highlight (if any)
+    pr.model.credits = 0                          # force the rebuy path
+    app.handle_keydown(pygame.K_r)
+    assert pr.model.credits == poker_game.REBUY_AMOUNT
+    poker_sec = profile_mod.game_section(app.profile, "poker")
+    assert poker_sec["lifetime"]["vp_rebuys"] >= 1
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print(f"video poker OK (bet={pr.model.bet}, last={pr.model.last_result[0]}, "
+          f"rebuys={poker_sec['lifetime']['vp_rebuys']})")
+
+    # backgammon (TABLETOP): roll, click a source then a destination (driving
+    # the real hit-test helpers, not the model directly) for several human
+    # turns interleaved with house AI turns; assert checker conservation.
+    app.game_id = "backgammon"
+    app.state = game_main.MENU
+    app.start_run("standard")
+    assert app.state == game_main.PLAYING
+    br = app.run
+    br._W, br._H = 1280, 860
+    app.gameplay_input = lambda: InputState()
+    turns = 0
+    guard = 0
+    while turns < 6 and br.model.winner is None and guard < 500:
+        guard += 1
+        if br.model.turn == "A":
+            if not br.model.dice:
+                br._roll()
+                render_frame()
+                if not br.model.dice:      # no legal moves this roll: passed
+                    turns += 1
+                continue
+            legal = br._legal_next_moves()
+            if not legal:
+                break
+            mv = legal[0]
+            src, dst = mv["from"], mv["to"]
+            sx, sy, sw, sh = br._bar_rect() if src == "bar" else br._point_rect(src)
+            br._click(sx + sw / 2, sy + sh / 2)
+            dx, dy, dw, dh = (br._off_rect("A") if dst == "off"
+                             else br._point_rect(dst))
+            br._click(dx + dw / 2, dy + dh / 2)
+            render_frame()               # exercises board/checker/dice draw
+            if not br.model.dice:         # turn committed
+                turns += 1
+        else:
+            app.update_playing(dt)        # drives the ~0.8s AI beat (roll, move)
+            render_frame()
+    assert br.model.checker_count("A") == 15 and br.model.checker_count("B") == 15
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print(f"backgammon OK ({turns} human turns driven, "
+          f"pips A={br.model.pip_count('A')} B={br.model.pip_count('B')})")
+
+    # battleship VS-AI + hotseat (CAB-25): boot each mode, place one ship via
+    # the cabinet cursor, then fire one shot — no companion server involved.
+    app.game_id = "battleship"
+    app.state = game_main.MENU
+    app.start_run("ai")
+    assert app.state == game_main.PLAYING
+    bs = app.run
+    assert bs.mode == "ai" and bs.session is None and bs.server is None
+    assert bs.model.fleet_complete(bs._cpu)          # house auto-deployed instantly
+    bs._cursor = [0, 0]
+    bs._orient_h = True
+    app.handle_keydown(pygame.K_RETURN)              # place the first ship
+    assert len(bs.model.ships[bs._human]) == 1
+    render_frame()                                   # exercises the placement draw
+    # skip to the fire phase to exercise one real shot via the cursor
+    bs.model.random_place(bs._human)
+    bs._to_place[bs._human] = []
+    bs.model.begin_fire(bs._human)
+    before_shots = len(bs.model.shots[bs._cpu])
+    cx, cy = next((x, y) for y in range(bs.model.size) for x in range(bs.model.size)
+                  if bs.model.can_fire(bs._human, x, y))
+    bs._cursor = [cx, cy]
+    app.handle_keydown(pygame.K_RETURN)              # fire
+    assert len(bs.model.shots[bs._cpu]) == before_shots + 1
+    render_frame()                                   # exercises the fire-phase draw
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+
+    app.game_id = "battleship"
+    app.state = game_main.MENU
+    app.start_run("hotseat")
+    bh = app.run
+    assert bh.mode == "hotseat" and bh._stage == "handoff" and bh._active == "P1"
+    render_frame()                                   # exercises the blackout draw
+    app.handle_keydown(pygame.K_RETURN)              # "ready" -> P1 places
+    assert bh._stage == "place"
+    bh._cursor = [0, 0]
+    bh._orient_h = True
+    app.handle_keydown(pygame.K_RETURN)              # place the first ship
+    assert len(bh.model.ships["P1"]) == 1
+    render_frame()
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print("battleship VS-AI + hotseat OK (boot, place one ship, fire one shot)")
+
+    # Cabinet Man: F1 summons the house pilot on an opted-in game (Solitaire),
+    # it plays a few moves on its own, then any real input instantly hands
+    # back the seat — exercising summon -> pilot moves -> handback live.
+    from games.cards.deck import Card as _Card
+    app.game_id = "solitaire"
+    app.state = game_main.MENU
+    app.start_run("draw1")
+    assert app.pilot is None and app.state == game_main.PLAYING
+    cm = app.run
+    full = lambda s: [_Card(r, s) for r in range(1, 14)]
+    cm.model.foundations = {"S": full("S"), "H": full("H"), "D": full("D"),
+                            "C": [_Card(r, "C") for r in range(1, 13)]}
+    cm.model.tableau = [{"down": [], "up": [_Card(13, "C")]}] + \
+                       [{"down": [], "up": []} for _ in range(6)]
+    cm.model.stock, cm.model.waste = [], []
+    cm.won_flag = False
+    app.handle_keydown(pygame.K_F1)             # summon
+    assert app.pilot is not None and app.wave_banner is not None
+    app.gameplay_input = lambda: InputState()   # hands off the controls
+    for _ in range(8):                          # the pilot plays on its own
+        app.update_playing(dt)
+        render_frame()                          # exercises the pulsing badge
+        if cm.model.won:
+            break
+    assert cm.pilot_touched                      # the run is flagged
+    pilot_won = cm.model.won
+    app.handle_keydown(pygame.K_n)               # a real key: instant handback
+    assert app.pilot is None
+    print(f"cabinet man OK (pilot won={pilot_won}, pilot_touched={cm.pilot_touched})")
+
+    # Cabinet Man on a SIM game (Voxel Hell): the pilot returns a synthesized
+    # InputState that main.py feeds into the run instead of the human's — so
+    # this exercises the other pilot path (fire/dodge bits, not direct model
+    # actions). Summon, let it play + shoot, confirm the run is flagged and a
+    # real key hands back.
+    app.game_id = "voxelhell"
+    app.state = game_main.MENU
+    app.start_run("campaign")
+    assert app.pilot is None and app.state == game_main.PLAYING
+    vh = app.run
+    app.gameplay_input = lambda: InputState()    # neutral human input
+    app.handle_keydown(pygame.K_F1)              # summon Cabinet Man
+    assert app.pilot is not None
+    for _ in range(240):                         # ~4s: enough to line up + fire
+        app.update_playing(dt)
+        if app.run.world.stats["shots"] > 0:
+            break
+    render_frame()                               # exercises the HUD + badge
+    assert vh.pilot_touched
+    vh_shots = vh.world.stats["shots"]
+    assert vh_shots > 0, "pilot never fired on voxelhell"
+    # shot economy: any shots-hits gap is only bullets still in flight (the
+    # just-fired one hasn't landed yet) — never a settled miss.
+    settled = (vh.world.stats["shots"] - vh.world.stats["hits"]
+               - len(vh.world.player_bullets))
+    assert settled <= 0, f"voxelhell pilot settled a miss ({settled})"
+    app.handle_keydown(pygame.K_LEFT)            # a real key: instant handback
+    assert app.pilot is None
+    print(f"cabinet man (voxel hell) OK (fired {vh_shots}, no settled miss, handback)")
+
+    # Cabinet Man on Serpent: the safety-checked, glyph-tracing snake. Summon,
+    # let it play a good while, confirm it grew, stayed alive, and traced glyphs.
+    app.game_id = "serpent"
+    app.state = game_main.MENU
+    app.start_run("arcade")
+    assert app.pilot is None and app.state == game_main.PLAYING
+    sp = app.run
+    app.gameplay_input = lambda: InputState()
+    app.handle_keydown(pygame.K_F1)              # summon
+    assert app.pilot is not None
+    start_len = sp.world.length
+    for _ in range(60 * 20):                     # ~20s of play
+        app.update_playing(dt)
+        if sp.world.run_over:
+            break
+    render_frame()                               # exercises the snake draw + badge
+    assert sp.pilot_touched
+    assert not sp.world.run_over, "serpent pilot died during the smoke window"
+    assert sp.world.length > start_len, "serpent pilot never grew"
+    glyphs = app.pilot.glyph_moves
+    assert glyphs > 0, "serpent pilot never traced a glyph"
+    app.handle_keydown(pygame.K_UP)              # a real key: instant handback
+    assert app.pilot is None
+    print(f"cabinet man (serpent) OK (grew {start_len}->{sp.world.length}, "
+          f"{glyphs} glyph moves, alive, handback)")
 
     pygame.quit()
     print("SMOKE TEST PASSED")

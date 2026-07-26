@@ -11,6 +11,7 @@ from render.voxel import quat_axis_angle
 from games.breaker.world import (
     BreakerWorld, BRICK_TYPES, SERVING, INTERMISSION, BRICK_W, BRICK_H,
 )
+from games.breaker.pilot import create_pilot  # noqa: F401 — cabinet opt-in
 
 INFO = GameInfo(
     "breaker", "VOXEL BREAKER",

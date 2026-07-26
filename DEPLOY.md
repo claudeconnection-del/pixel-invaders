@@ -196,3 +196,6 @@ Set in `docker-compose.yml` (then `docker compose up -d`):
 | `POST /api/v1/sessions/{code}/join` | join by code |
 | `POST /api/v1/sessions/{code}/scores` | report your seeded-run score |
 | `GET /api/v1/sessions/{code}` | live session standings |
+| `POST /replays` | upload a CAB-13-signed replay tied to a `(game, mode, name, score)` entry (top-10 only) |
+| `GET /replays?game=&mode=` | list available replays for a board |
+| `GET /replays/{id}` | fetch one stored replay's full signed payload |

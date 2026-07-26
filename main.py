@@ -9,6 +9,7 @@ Cabinet controls:
 Game controls are per-game (Voxel Hell: Space fire, Shift focus).
 """
 import copy
+import json
 import math
 import os
 import random
@@ -18,6 +19,9 @@ import time
 
 import pygame
 
+from ambient import preset as ambient_preset
+from ambient import scenes as ambient_scenes
+from ambient.mode import AmbientMode
 from game import events as ev
 from game import theme
 from game.assets import AudioBank, MUSIC_END_EVENT
@@ -26,14 +30,19 @@ from game.theme import (
 )
 from game.entities import InputState
 from game.netclient import ArcadeClient
+from arcade.pilot import create_pilot_for, suppress_for_pilot
+from arcade.game_api import resolve_stats_rows
+from arcade import cabinet_man as cabinet_man_mod
 from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
                    load_games)
 from meta import ghost as ghost_mod
 from meta import leaderboard as lb
 from meta import profile as profile_mod
 from meta import replay as replay_mod
-from meta.achievements import AchievementEngine
+from meta.achievements import Achievement, AchievementEngine, evaluate_ambient
 from meta.outbox import Outbox
+from meta import outbox as outbox_mod
+from meta import completion as completion_mod
 from meta.stats import StatsTracker
 
 APP_NAME = "Cabinet Man"  # the product; "Emberlight" is its look (game/theme.py)
@@ -59,9 +68,23 @@ MP_CODE = "mp_code"
 LOBBY = "lobby"
 REPLAYS = "replays"        # browse saved replays
 REPLAYING = "replaying"    # watch one back in-engine (with real audio)
+AMBIENT = "ambient"        # calm generative screen (idle or manual)
 
 # replay playback speeds cycled with Up/Down in the theater
 REPLAY_SPEEDS = [0.5, 1.0, 2.0, 4.0]
+
+# built-in ambient preset ids selectable from Settings (premium/custom are
+# reached in-ambient); kept here so SETTINGS_ROWS has a static choice list
+AMBIENT_FREE_IDS = [p.id for p in ambient_preset.DEFAULTS if p.premium is None]
+
+# in-ambient customization panel (manual mode only)
+AMBIENT_EDIT_ROWS = ["Scene", "Palette", "Speed", "Density", "Sound", "Dim"]
+_AMBIENT_SCENE_IDS = list(ambient_scenes.SCENES)
+_AMBIENT_PALETTES = [(p.name, [list(c) for c in p.palette])
+                     for p in ambient_preset.DEFAULTS]
+_AMBIENT_DENSITIES = ["low", "medium", "high"]
+_AMBIENT_SOUNDS = ["silence", "bed:ambient", "music:menu", "music:game"]
+_AMBIENT_MAX_CUSTOM = 6
 
 # Emberlight cabinet palette (see game/theme.py). Screens use semantic tokens
 # (imported up top) so every menu reads as one system.
@@ -70,7 +93,7 @@ DANGER = theme.DANGER   # loss / locked / offline
 INFO = theme.INFO       # neutral informational accent
 
 MENU_ITEMS = ["PLAY", "MULTIPLAYER", "HANGAR", "SCORES", "REPLAYS",
-              "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
+              "AMBIENT", "ACHIEVEMENTS", "STATS", "SETTINGS", "QUIT"]
 
 # (label, settings key, choices) — Left/Right cycles; floats step by 0.1
 SETTINGS_ROWS = [
@@ -83,9 +106,17 @@ SETTINGS_ROWS = [
     ("Look sensitivity", "mouse_sens", [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5]),
     ("Ghost rival", "ghost", ["off", "personal"]),
     ("Game music", "game_music", ["classic", "custom"]),
+    ("Idle screen", "idle_screen", ["attract", "ambient", "off"]),
+    ("Cabinet Man", "cabinet_man", [True, False]),
+    ("Attract star", "attract_star", ["replays", "cabinet_man", "mixed"]),
+    ("Ambient mode", "ambient_mode", AMBIENT_FREE_IDS),
+    ("Ambient sound", "ambient_sound", ["preset", "silence"]),
     ("Music volume", "music_vol", "float"),
     ("SFX volume", "sfx_vol", "float"),
     ("Show FPS", "show_fps", [False, True]),
+    ("Share replays", "share_replays", ["ask", "always", "never"]),
+    ("Export profile", "export_profile", "action"),
+    ("Import profile", "import_profile", "action"),
 ]
 DISPLAY_KEYS = {"vsync", "fullscreen"}  # need a window/context rebuild
 
@@ -152,11 +183,14 @@ class App:
             stick = pygame.joystick.Joystick(i)
             self.joysticks[stick.get_instance_id()] = stick
         self.pad_nav_cooldown = 0.0
+        self._mouse_moved = False   # this frame's mouse motion (CAB-23 pad cursor)
 
         self.state = MENU
         self.menu_index = 0
         self.mode_index = 0
         self.settings_index = 0
+        self.settings_msg = ""        # export/import status line
+        self._import_armed = False    # import confirm (two-press)
         self.skin_index = 0
         self.run = None
         self.run_stats_tracker = None
@@ -168,11 +202,20 @@ class App:
         self.wave_banner = None   # (text, timer)
         self.showcase_index = 0
 
+        # Cabinet Man: the summonable house player (F1 while PLAYING)
+        self.pilot = None
+        self.pilot_watch = 0.0        # unbroken seconds watching the current summon
+        self.session_best = {}        # game_id -> best own-hands score this session
+        self.tag_team_armed = False   # a pilot drove this run, then handed back
+
         # arcade presentation
         self.idle_timer = 0.0
         self.attract_index = -1
+        self.attract_cycle = 0        # monotonic attract-cycle counter (star pick)
         self.attract_run = None
         self.attract_gid = None
+        self.attract_pilot = None     # live Cabinet Man pilot starring this cycle
+        self.attract_is_pilot = False
 
         # global leaderboard (offline-safe)
         self.net = ArcadeClient(self.profile["settings"].get("server_url", ""))
@@ -182,8 +225,9 @@ class App:
         # offline score outbox: queued submissions retried on next contact
         self.outbox = Outbox(
             self.profile, self.net,
-            on_rank=lambda rank: (self.post_banner(f"GLOBAL RANK #{rank}", 3.0),
-                                  self.audio.play("toast")),
+            on_rank=self._on_score_synced,
+            on_replay_uploaded=lambda item, rid: (
+                self.post_banner("REPLAY SHARED", 2.0), self.audio.play("toast")),
             save_cb=self.save_profile)
         self.outbox_timer = 5.0  # first drain shortly after boot
 
@@ -202,6 +246,18 @@ class App:
         self.replays_list = []      # metadata for the browser screen
         self.replays_index = 0
         self.replay_view = None     # active in-engine playback, or None
+        self.replay_tab = "local"   # local | shared (CAB-15)
+        self.shared_replays = {}    # (game, mode) -> list | "pending" | "error"
+        self.share_prompt = None    # (game, mode, name, score, path) awaiting Y/N
+        self._pending_share = None  # queued once its score outbox item syncs
+
+        # ambient mode: a calm generative screen (idle-fade or manual)
+        self.ambient = AmbientMode(self._current_ambient_preset())
+        self.entered_auto = False   # drives the faint "press any key" hint
+        self.ambient_session = 0.0  # continuous seconds this ambient visit
+        self.ambient_edit = False   # manual-only customization panel open?
+        self.ambient_edit_row = 0
+        self.ambient_saved_msg = ""
 
         # multiplayer session state
         self.mp = None            # {code, seed, game, mode, players, name}
@@ -244,6 +300,85 @@ class App:
         resolver = getattr(module, "skin_for_achievement", None)
         return AchievementEngine(self.section, module.ACHIEVEMENTS, resolver)
 
+    # -------------------------------------------------------- Cabinet Man
+    def _toggle_pilot(self):
+        """F1 while PLAYING: summon Cabinet Man, or hand back if already at
+        the controls. A no-op if the master toggle is off."""
+        if not self.profile["settings"].get("cabinet_man", True):
+            return
+        if self.pilot is not None:
+            self._handback_pilot()
+            return
+        self.pilot = create_pilot_for(self.game, self.run)
+        if self.pilot is None:
+            return          # this game hasn't opted in — no-op
+        cm = cabinet_man_mod.cabinet_man_section(self.profile)
+        cm["counters"]["summons"] += 1
+        self.pilot_watch = 0.0
+        self.post_banner(cabinet_man_mod.takeover_banner(cm["counters"]["summons"]),
+                         2.0)
+        self.audio.play("menu_select")
+        self.save_profile()
+
+    def _handback_pilot(self):
+        if self.pilot is None:
+            return
+        self.pilot = None
+        # once a pilot has driven any part of a run, taking back control arms
+        # the "tag_team" achievement: beating your session best from here is
+        # all your own doing (the pilot's score never counts — E1 integrity).
+        self.tag_team_armed = True
+        self.pilot_watch = 0.0
+        self.post_banner(cabinet_man_mod.HANDBACK_BANNER, 1.5)
+
+    def _check_cabinet_man_achievements(self, **extra):
+        """Evaluate Cabinet Man's cabinet-level achievements against live
+        context; toast + persist any new unlock. Cheap (2 predicates), safe
+        per-frame since only an actual unlock writes the profile."""
+        cm = cabinet_man_mod.cabinet_man_section(self.profile)
+        cm["counters"]["longest_watch"] = max(
+            cm["counters"].get("longest_watch", 0.0), self.pilot_watch)
+        context = {"watch_seconds": self.pilot_watch}
+        context.update(extra)
+        for aid, name, desc in cabinet_man_mod.evaluate_cabinet_man(
+                self.profile, context):
+            self.toasts.append([Achievement(aid, name, desc, lambda *a: False),
+                                3.5])
+            self.audio.play("toast")
+            self.save_profile()
+
+    def _track_tag_team(self, run):
+        """After a pilot has driven a run and the human took back over, unlock
+        `tag_team` if the player's own score now beats their session best for
+        this game. Pilot-driven score never counts (suppress_for_pilot gates
+        it), so this is always the human's own doing."""
+        if not self.tag_team_armed or self.pilot is not None:
+            return
+        if suppress_for_pilot(run):
+            return          # still a pilot-tainted moment; wait for clean play
+        score = int(getattr(run, "score", 0))
+        best = self.session_best.get(self.game_id, 0)
+        if score > best and best > 0:
+            self._check_cabinet_man_achievements(
+                beat_session_best_after_handback=True)
+
+    @staticmethod
+    def _pilot_real_input(inp):
+        """True if the human is actually touching the controls this frame —
+        any of these firing while Cabinet Man is active hands the seat back
+        instantly (mirrors the raw-keydown handback in handle_keydown)."""
+        return (inp.left or inp.right or inp.up or inp.down or inp.fire
+                or inp.focus or inp.strafe != 0 or inp.turn != 0
+                or inp.look_dx != 0)
+
+    def _draw_pilot_badge(self, o):
+        if self.pilot is None:
+            return
+        pulse = int(180 + 60 * abs(math.sin(self.renderer.time * 3)))
+        label = f"◈ {self.pilot.label.upper()} AT THE CONTROLS"
+        w = o.text_width(label, size=16)
+        o.text(label, self.W - w - 20, 20, size=16, color=(255, 200, 60, pulse))
+
     # ------------------------------------------------------------- display
     def apply_display_settings(self):
         """(Re)create the window + GL context from current settings. All GL
@@ -279,6 +414,9 @@ class App:
     def adjust_setting(self, index, direction):
         label, key, choices = SETTINGS_ROWS[index]
         s = self.profile["settings"]
+        if choices == "action":
+            self._settings_action(key)
+            return
         if choices == "float":
             s[key] = round(min(1.0, max(0.0, s[key] + 0.1 * direction)), 2)
         else:
@@ -300,7 +438,54 @@ class App:
             if self.audio.current_pool == "game":  # re-resolve immediately
                 self.audio.music(None)
                 self.audio.music("game")
+        elif key == "ambient_mode":
+            # picking a built-in default preset also updates the remembered
+            # 'current' and the live engine
+            profile_mod.ambient_section(self.profile)["current"] = s["ambient_mode"]
+            self.ambient.set_preset(self._current_ambient_preset())
         self.save_profile()
+
+    def _settings_action(self, key):
+        """Export / import the profile (CAB-27). Fixed file path — no dialog."""
+        if key == "export_profile":
+            self._import_armed = False
+            path = profile_mod.export_profile(self.profile)
+            self.settings_msg = (f"Exported to {os.path.basename(path)}" if path
+                                 else "Export failed (couldn't write file)")
+            self.audio.play("menu_select")
+            return
+        # import: confirm on a second press (it replaces the live profile)
+        imported = profile_mod.import_profile()
+        if imported is None:
+            self._import_armed = False
+            self.settings_msg = f"No {profile_mod.EXPORT_NAME} found (or corrupt)"
+            return
+        if not self._import_armed:
+            self._import_armed = True
+            self.settings_msg = "Replace current profile? Import again to confirm."
+            return
+        # confirmed: back up the current profile, then swap in the imported one.
+        # Replace the dict CONTENTS in place (not the reference) so every holder
+        # that captured self.profile at construction — the outbox, etc. — keeps
+        # pointing at the live profile.
+        self._import_armed = False
+        backup = profile_mod.backup_profile()
+        self.profile.clear()
+        self.profile.update(imported)
+        self.save_profile()
+        self._apply_imported_settings()
+        note = f" (backup: {os.path.basename(backup)})" if backup else ""
+        self.settings_msg = "Profile imported — restart for display settings" + note
+        self.audio.play("win")
+
+    def _apply_imported_settings(self):
+        """Re-apply the cheap live settings after an import (audio/quality);
+        display-level settings (vsync/fullscreen) take a restart."""
+        s = self.profile["settings"]
+        self.audio.set_volumes(s.get("sfx_vol", 1.0), s.get("music_vol", 0.45))
+        self.renderer.apply_quality(bloom=s.get("bloom", "full"),
+                                    particles=s.get("particles", "high"))
+        self.audio.set_music_enabled(s.get("music", True))
 
     # --------------------------------------------------------------- input
     def handle_keydown(self, key):
@@ -309,6 +494,15 @@ class App:
 
         if self.state == ATTRACT:
             self.stop_attract()
+            return
+
+        if self.state == AMBIENT:
+            if self.ambient_edit:
+                self._ambient_edit_key(key)          # panel is modal
+            elif (not self.entered_auto) and key == pygame.K_TAB:
+                self._open_ambient_edit()            # manual: opt into chrome
+            else:
+                self.stop_ambient()                  # any other key wakes/exits
             return
 
         if self.state == INITIALS:
@@ -337,6 +531,14 @@ class App:
             return
 
         if self.state == LEADERBOARD:
+            if self.share_prompt is not None and key in (pygame.K_y, pygame.K_n):
+                if key == pygame.K_y:
+                    self._share_replay_now(self.share_prompt)
+                    audio.play("menu_select")
+                else:
+                    audio.play("menu_move")
+                self.share_prompt = None
+                return
             modes = self.game.INFO.modes
             if key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d) \
                     and len(modes) > 1:
@@ -348,8 +550,16 @@ class App:
                 audio.play("menu_move")
                 if self.board_scope == "global":
                     self._request_global_board()
+            elif key == pygame.K_r and outbox_mod.pending_count(self.profile):
+                before = outbox_mod.pending_count(self.profile)
+                self.outbox.drain()                 # existing flush path
+                after = outbox_mod.pending_count(self.profile)
+                self.post_banner(
+                    outbox_mod.retry_summary(before, after, self.net.available), 2.5)
+                audio.play("menu_select")
             elif key in (pygame.K_ESCAPE, pygame.K_RETURN):
                 self.last_rank = None
+                self.share_prompt = None
                 self.state = MENU
                 self.audio.music("menu")
             return
@@ -418,18 +628,31 @@ class App:
             return
 
         if self.state == REPLAYS:
-            lst = self.replays_list
-            if key in (pygame.K_UP, pygame.K_w) and lst:
+            lst = self._replays_current_list()
+            if key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d) \
+                    and self.net.available:
+                self.replay_tab = "shared" if self.replay_tab == "local" else "local"
+                self.replays_index = 0
+                audio.play("menu_move")
+                if self.replay_tab == "shared":
+                    self._request_shared_replays()
+            elif key in (pygame.K_UP, pygame.K_w) and lst:
                 self.replays_index = (self.replays_index - 1) % len(lst)
                 audio.play("menu_move")
             elif key in (pygame.K_DOWN, pygame.K_s) and lst:
                 self.replays_index = (self.replays_index + 1) % len(lst)
                 audio.play("menu_move")
             elif key == pygame.K_RETURN and lst:
-                self.start_replay(lst[self.replays_index]["path"])
-            elif key == pygame.K_g and lst:
+                if self.replay_tab == "local":
+                    self.start_replay(lst[self.replays_index]["path"])
+                else:
+                    entry = lst[self.replays_index]
+                    self.export_status = "Fetching replay..."
+                    self.net.fetch_replay(entry["id"],
+                                          tag=("replay_fetch", entry["id"]))
+            elif key == pygame.K_g and lst and self.replay_tab == "local":
                 self._spawn_export("gif", lst[self.replays_index])
-            elif key == pygame.K_v and lst:
+            elif key == pygame.K_v and lst and self.replay_tab == "local":
                 self._spawn_export("mp4", lst[self.replays_index])
             elif key == pygame.K_o:
                 self._open_exports_folder()
@@ -486,6 +709,8 @@ class App:
                     self.menu_index = 2  # jump to PLAY
                 else:
                     self.menu_choose(row)
+            elif key == pygame.K_F2:      # manual ambient (chrome-free)
+                self.start_ambient(auto=False)
             elif key == pygame.K_ESCAPE:
                 self.quit()
 
@@ -527,13 +752,17 @@ class App:
 
         elif self.state == SETTINGS_SCREEN:
             if key == pygame.K_ESCAPE:
+                self._import_armed = False
+                self.settings_msg = ""
                 self.save_profile()
                 self.state = MENU
             elif key in (pygame.K_UP, pygame.K_w):
                 self.settings_index = (self.settings_index - 1) % len(SETTINGS_ROWS)
+                self._import_armed = False    # moving off the row cancels confirm
                 audio.play("menu_move")
             elif key in (pygame.K_DOWN, pygame.K_s):
                 self.settings_index = (self.settings_index + 1) % len(SETTINGS_ROWS)
+                self._import_armed = False
                 audio.play("menu_move")
             elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d,
                          pygame.K_RETURN):
@@ -545,8 +774,13 @@ class App:
             if key == pygame.K_ESCAPE:
                 self.state = PAUSED
                 self.audio.music(None)
-            elif hasattr(self.run, "handle_key"):
-                self.run.handle_key(key)
+            elif key == pygame.K_F1:
+                self._toggle_pilot()
+            else:
+                if self.pilot is not None:
+                    self._handback_pilot()
+                if hasattr(self.run, "handle_key"):
+                    self.run.handle_key(key)
 
         elif self.state == PAUSED:
             if key == pygame.K_ESCAPE:
@@ -651,6 +885,8 @@ class App:
         elif choice == "REPLAYS":
             if self.game.INFO.has_scores:
                 self.open_replays()
+        elif choice == "AMBIENT":
+            self.start_ambient(auto=False)
         elif choice == "ACHIEVEMENTS":
             self.state = ACHIEVEMENTS_SCREEN
         elif choice == "STATS":
@@ -668,6 +904,7 @@ class App:
             seed = random.randrange(2 ** 31)
         self.run_seed = seed
         self.run = self.game.create_run(mode, random.Random(seed))
+        self.run.pilot_touched = False   # Cabinet Man hasn't driven this run
         if hasattr(self.run, "attach_profile"):
             self.run.attach_profile(self.section, self.profile["settings"],
                                     self.save_profile)
@@ -676,6 +913,7 @@ class App:
         self.run_engine = self.engine_for_current_game()
         self.run_summary = None
         self.pending_board = None
+        self.pilot = None
         self.toasts.clear()
         self.wave_banner = None
         self.state = PLAYING
@@ -815,6 +1053,7 @@ class App:
         """Enter the replay browser for the current game (newest first)."""
         self.replays_list = replay_mod.list_for_game(self.game_id)
         self.replays_index = 0
+        self.replay_tab = "local"
         self.export_status = ""
         self.state = REPLAYS
         self.audio.music("menu")
@@ -904,6 +1143,7 @@ class App:
         self.last_rank = lb.submit(self.profile, game_id, mode, name, score, extra)
         # global submission goes through the outbox: survives being offline
         self.outbox.queue_score(game_id, mode, name, score, extra.get("wave"))
+        self._offer_replay_share(game_id, mode, name, score)
         self.pending_board = None
         self.board_scope = "local"
         self.board_mode_index = next(
@@ -911,6 +1151,78 @@ class App:
         self.save_profile()
         self.audio.play("toast")
         self.state = LEADERBOARD
+
+    # --------------------------------------------------- replay share (CAB-15)
+    def _offer_replay_share(self, game_id, mode, name, score):
+        """A qualifying run's replay can ride along with its score submission.
+        `always` shares silently (queued behind the score, see
+        `_on_score_synced`); `ask` shows a Y/N prompt on the leaderboard;
+        `never` skips entirely. Never touches a replay from a different
+        game/mode (a stale `self.last_replay` from an earlier run)."""
+        rep = self.last_replay
+        if rep is None or rep.get("game") != game_id or rep.get("mode") != mode:
+            return
+        pending = (game_id, mode, name, int(score), replay_mod.last_path(game_id, mode))
+        pref = self.profile["settings"].get("share_replays", "ask")
+        if pref == "always":
+            self._pending_share = pending
+        elif pref == "ask":
+            self.share_prompt = pending
+
+    def _share_replay_now(self, pending):
+        """Arm the replay to upload once its score's outbox item confirms
+        synced (`_on_score_synced`) — CAB-14's server only accepts a replay
+        upload once the matching score is already visible top-10, so we never
+        race the two submissions."""
+        self._pending_share = pending
+
+    def _on_score_synced(self, rank):
+        self.post_banner(f"GLOBAL RANK #{rank}", 3.0)
+        self.audio.play("toast")
+        if self._pending_share is not None:
+            game_id, mode, name, score, path = self._pending_share
+            self._pending_share = None
+            self.outbox.queue_replay(game_id, mode, name, score, path)
+
+    def _request_shared_replays(self):
+        """Fetch every mode's shared-replay list for the current game (the
+        Theater has no separate mode selector, so all modes are merged)."""
+        if not self.net.available:
+            return
+        for mode_id, _ in self.game.INFO.modes:
+            key = (self.game_id, mode_id)
+            if self.shared_replays.get(key) in (None, "error"):
+                self.shared_replays[key] = "pending"
+                self.net.fetch_replays(self.game_id, mode_id)
+
+    def _shared_replays_combined(self):
+        combined = []
+        for mode_id, _ in self.game.INFO.modes:
+            data = self.shared_replays.get((self.game_id, mode_id))
+            if isinstance(data, list):
+                combined.extend(dict(e, mode=mode_id) for e in data)
+        combined.sort(key=lambda e: e.get("score", 0), reverse=True)
+        return combined
+
+    def _replays_current_list(self):
+        return (self.replays_list if self.replay_tab == "local"
+               else self._shared_replays_combined())
+
+    def _cache_shared_replay(self, replay_id, data):
+        """Downloaded shared replays land in their own subfolder so they never
+        collide with (or get mistaken for) this cabinet's own local replays."""
+        directory = os.path.join(replay_mod.REPLAY_DIR, "shared")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{replay_id}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return path
+
+    def _on_shared_replay_fetched(self, replay_id, payload):
+        if payload is None:
+            self.export_status = "Could not fetch that replay (offline?)"
+            return
+        self.start_replay(self._cache_shared_replay(replay_id, payload))
 
     def _request_global_board(self):
         modes = self.game.INFO.modes
@@ -930,6 +1242,14 @@ class App:
                     self.global_boards[key] = "error"
                 else:
                     self.global_boards[key] = payload.get("scores", [])
+            elif isinstance(tag, tuple) and tag[0] == "replays":
+                key = (tag[1], tag[2])
+                if payload is None:
+                    self.shared_replays[key] = "error"
+                else:
+                    self.shared_replays[key] = payload.get("replays", [])
+            elif isinstance(tag, tuple) and tag[0] == "replay_fetch":
+                self._on_shared_replay_fetched(tag[1], payload)
             elif tag == "submit" and payload is not None:
                 self.post_banner(f"GLOBAL RANK #{payload['rank']}", 3.0)
                 self.audio.play("toast")
@@ -971,17 +1291,36 @@ class App:
         eligible = [g for g in GAME_IDS if self.games[g].INFO.attract]
         if not eligible:
             return
-        self.attract_index = (self.attract_index + 1) % len(eligible)
-        gid = eligible[self.attract_index]
+        self.attract_cycle += 1
+        settings = self.profile["settings"]
+        # a live Cabinet Man run can star this cycle instead of the canned demo
+        # bot — gated by the master toggle, the attract-star setting, and which
+        # attract-eligible games have opted in (export create_pilot).
+        pilot_gids = [g for g in cabinet_man_mod.pilot_game_ids(self.games)
+                      if self.games[g].INFO.attract]
+        use_pilot = (settings.get("cabinet_man", True)
+                     and cabinet_man_mod.attract_star_is_pilot(
+                         settings.get("attract_star", "mixed"), pilot_gids,
+                         self.attract_cycle))
+        if use_pilot:
+            gid = cabinet_man_mod.pick_pilot_gid(pilot_gids, self.attract_cycle)
+        else:
+            self.attract_index = (self.attract_index + 1) % len(eligible)
+            gid = eligible[self.attract_index]
         self.attract_gid = gid
         self.attract_run = self.games[gid].create_run(
             self.games[gid].INFO.modes[0][0], random.Random())
+        self.attract_pilot = (create_pilot_for(self.games[gid], self.attract_run)
+                              if use_pilot else None)
+        self.attract_is_pilot = self.attract_pilot is not None
         self.state = ATTRACT
         self.wave_banner = None
         self.audio.music(None)
 
     def stop_attract(self):
         self.attract_run = None
+        self.attract_pilot = None
+        self.attract_is_pilot = False
         self.idle_timer = 0.0
         self.state = MENU
         self.audio.music("menu")
@@ -990,7 +1329,16 @@ class App:
     def update_attract(self, dt):
         run = self.attract_run
         module = self.games[self.attract_gid]
-        run.update(dt, module.demo_bot(run.world))
+        # a Cabinet Man attract run is a throwaway showcase: the pilot drives,
+        # but (like every attract demo) it never touches stats/achievements/
+        # profile — only effects are played. The E1 suppression flag is set on
+        # the run for good measure, though attract never feeds the engine.
+        if self.attract_is_pilot and self.attract_pilot is not None:
+            pilot_inp = self.attract_pilot.step(run, dt)
+            run.update(dt, pilot_inp if pilot_inp is not None else InputState())
+            run.pilot_touched = True
+        else:
+            run.update(dt, module.demo_bot(run.world))
         # effects only — attract demos never touch stats or achievements
         for etype, data in run.drain_events():
             run.on_event(etype, data, self.renderer, self.audio, self.post_banner)
@@ -999,12 +1347,176 @@ class App:
         if run.run_over:
             self.start_attract()
 
+    # -------------------------------------------------------------- ambient
+    def _unlocked_achievements(self):
+        """Every earned achievement id across all games (for premium gating)."""
+        out = set()
+        for section in self.profile.get("games", {}).values():
+            out.update(section.get("achievements", {}).keys())
+        return out
+
+    def _ambient_presets(self):
+        """Selectable presets: unlock-gated built-ins + saved custom slots."""
+        amb = profile_mod.ambient_section(self.profile)
+        return (ambient_preset.available_presets(self._unlocked_achievements())
+                + ambient_preset.custom_presets(amb))
+
+    def _current_ambient_preset(self):
+        """The active ambient preset: profile['ambient']['current'] if it still
+        resolves, else the first available built-in."""
+        amb = profile_mod.ambient_section(self.profile)
+        want = amb.get("current") or self.profile["settings"].get("ambient_mode")
+        presets = self._ambient_presets()
+        for p in presets:
+            if p.id == want:
+                return p
+        return presets[0] if presets else ambient_preset.DEFAULTS[0]
+
+    def start_ambient(self, auto):
+        """Enter the calm screen. `auto` (idle fade) shows a faint return hint;
+        manual entry is chrome-free. Bumps the matching entry counter."""
+        self.entered_auto = auto
+        self.ambient.set_preset(self._current_ambient_preset())
+        self.ambient.t = 0.0
+        self.ambient_session = 0.0
+        self.ambient_edit = False
+        self.ambient_saved_msg = ""
+        self.wave_banner = None
+        self.state = AMBIENT
+        amb = profile_mod.ambient_section(self.profile)
+        amb["counters"]["idle_entries" if auto else "manual_entries"] += 1
+        self.save_profile()
+        if self.profile["settings"].get("ambient_sound", "preset") == "silence":
+            self.audio.music(None)
+        else:
+            self.ambient.start_sound(self.audio)
+        if not auto:
+            self.audio.play("menu_select")
+
+    def stop_ambient(self):
+        """Any input leaves ambient back to the menu, restoring menu music."""
+        self.idle_timer = 0.0
+        self.state = MENU
+        self.audio.music("menu")
+        self.audio.play("menu_select")
+        self.save_profile()
+
+    def update_ambient(self, dt):
+        self.ambient.update(dt)
+        self.ambient_session += dt
+        amb = profile_mod.ambient_section(self.profile)
+        amb["counters"]["total_seconds"] += dt
+        self._check_ambient_achievements(amb)
+
+    def _check_ambient_achievements(self, amb):
+        """Evaluate the mood achievements against live counters + context; toast
+        and persist any new unlock. Cheap (4 predicates); safe to call each
+        frame since only an actual unlock writes the profile."""
+        last_end = amb["counters"].get("last_run_end_ts", 0.0)
+        context = {
+            "session_seconds": self.ambient_session,
+            "idle_entries": amb["counters"].get("idle_entries", 0),
+            "since_run_end_s": (time.time() - last_end) if last_end else 1e9,
+            "hour": time.localtime().tm_hour,
+        }
+        for achievement in evaluate_ambient(self.profile, context):
+            self.toasts.append([achievement, 3.5])
+            self.audio.play("toast")
+            self.save_profile()
+
+    # ---- in-ambient customization (manual only) --------------------------
+    def _open_ambient_edit(self):
+        """Open the edit panel. Work on a *copy* of the live preset so tweaks
+        never mutate a shared built-in DEFAULTS object."""
+        self.ambient.set_preset(ambient_preset.AmbientPreset.from_dict(
+            self.ambient.preset.to_dict()))
+        self.ambient_edit = True
+        self.ambient_edit_row = 0
+        self.ambient_saved_msg = ""
+        self.audio.play("menu_select")
+
+    def _ambient_edit_key(self, key):
+        rows = AMBIENT_EDIT_ROWS
+        if key in (pygame.K_TAB, pygame.K_ESCAPE):
+            self.ambient_edit = False            # close panel, stay in ambient
+            self.audio.play("menu_move")
+        elif key in (pygame.K_UP, pygame.K_w):
+            self.ambient_edit_row = (self.ambient_edit_row - 1) % len(rows)
+            self.audio.play("menu_move")
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.ambient_edit_row = (self.ambient_edit_row + 1) % len(rows)
+            self.audio.play("menu_move")
+        elif key in (pygame.K_LEFT, pygame.K_a):
+            self._ambient_edit_adjust(-1)
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            self._ambient_edit_adjust(1)
+        elif key == pygame.K_RETURN:
+            self._ambient_save()
+
+    def _ambient_edit_adjust(self, direction):
+        """Cycle/step the selected field on the live (copied) preset — changes
+        apply immediately since the engine holds that same object."""
+        p = self.ambient.preset
+        row = AMBIENT_EDIT_ROWS[self.ambient_edit_row]
+        if row == "Scene":
+            i = _AMBIENT_SCENE_IDS.index(p.scene) if p.scene in _AMBIENT_SCENE_IDS else 0
+            p.scene = _AMBIENT_SCENE_IDS[(i + direction) % len(_AMBIENT_SCENE_IDS)]
+        elif row == "Palette":
+            names = [n for n, _ in _AMBIENT_PALETTES]
+            cur = self._palette_name(p.palette)
+            i = names.index(cur) if cur in names else 0
+            p.palette = [list(c) for c in
+                         _AMBIENT_PALETTES[(i + direction) % len(names)][1]]
+        elif row == "Speed":
+            p.speed = round(min(2.0, max(0.2, p.speed + direction * 0.2)), 1)
+        elif row == "Density":
+            i = _AMBIENT_DENSITIES.index(p.density) if p.density in _AMBIENT_DENSITIES else 1
+            p.density = _AMBIENT_DENSITIES[(i + direction) % len(_AMBIENT_DENSITIES)]
+        elif row == "Sound":
+            i = _AMBIENT_SOUNDS.index(p.sound) if p.sound in _AMBIENT_SOUNDS else 0
+            p.sound = _AMBIENT_SOUNDS[(i + direction) % len(_AMBIENT_SOUNDS)]
+            if self.profile["settings"].get("ambient_sound", "preset") != "silence":
+                self.ambient.start_sound(self.audio)  # preview the new sound
+        elif row == "Dim":
+            p.dim = round(min(0.6, max(0.0, p.dim + direction * 0.05)), 2)
+        self.audio.play("menu_move")
+
+    def _palette_name(self, palette):
+        for name, pal in _AMBIENT_PALETTES:
+            if [list(c) for c in pal] == [list(c) for c in palette]:
+                return name
+        return "custom"
+
+    def _ambient_save(self):
+        """Save the live preset as a new custom slot (capped), make it current."""
+        amb = profile_mod.ambient_section(self.profile)
+        customs = amb["custom"]
+        existing = {c.get("id") for c in customs}
+        i = 1
+        while f"custom_{i}" in existing:
+            i += 1
+        cid = f"custom_{i}"
+        data = self.ambient.preset.to_dict()
+        data["id"], data["name"], data["premium"] = cid, f"Custom {i}", None
+        customs.append(data)
+        while len(customs) > _AMBIENT_MAX_CUSTOM:
+            customs.pop(0)
+        amb["current"] = cid
+        self.ambient.preset.id = cid
+        self.ambient.preset.name = data["name"]
+        self.save_profile()
+        self.ambient_saved_msg = f"Saved {data['name']}"
+        self.audio.play("toast")
+
     def abandon_run(self):
         """Quit to menu mid-run: counts stats so far as an unfinished run."""
         if self.run is not None and not self.run.run_over:
             life = self.section["lifetime"]
             life["runs"] += 1
+        if self.run is not None and hasattr(self.run, "close"):
+            self.run.close()   # let a run release resources (e.g. board host server)
         self.run = None
+        self.pilot = None
         self.save_profile()
         self.state = LOBBY if self.mp is not None else MENU
         self.audio.music("menu")
@@ -1052,12 +1564,20 @@ class App:
         if self.state == ATTRACT:
             self.stop_attract()
             return
+        if self.state == AMBIENT:
+            self.stop_ambient()
+            return
         in_game = self.state in (PLAYING, PAUSED)
+        cursor = getattr(self.run, "pad_cursor", None)
         if button == 0:      # A: confirm (fire is polled separately in-game)
-            if not in_game:
+            if self.state == PLAYING and cursor is not None:
+                cursor.confirm()
+            elif not in_game:
                 self.handle_keydown(pygame.K_RETURN)
         elif button == 1:    # B: back / resume
-            if self.state != PLAYING:
+            if self.state == PLAYING and cursor is not None:
+                cursor.clear()
+            elif self.state != PLAYING:
                 self.handle_keydown(pygame.K_ESCAPE)
         elif button == 6:    # back/select: quit to menu while paused
             if self.state == PAUSED:
@@ -1087,6 +1607,33 @@ class App:
             self.handle_keydown(key)
             self.pad_nav_cooldown = 0.22
 
+    def poll_pad_cursor(self, dt):
+        """D-pad/stick steps a tabletop game's pad cursor (CAB-23) — only
+        during PLAYING, and only for a run that opts in via a `pad_cursor`
+        attribute (Solitaire/Rummy today). Shares `pad_nav_cooldown` with
+        `poll_pad_navigation` safely: that method already no-ops during
+        PLAYING, so the two never fight over the same timer."""
+        run = self.run
+        cursor = getattr(run, "pad_cursor", None)
+        if self.state != PLAYING or cursor is None:
+            return
+        self.pad_nav_cooldown = max(0.0, self.pad_nav_cooldown - dt)
+        dx, dy, _, _, _ = self.pad_state()
+        if self.pad_nav_cooldown > 0:
+            return
+        direction = None
+        if dy < -0.5:
+            direction = "up"
+        elif dy > 0.5:
+            direction = "down"
+        elif dx < -0.5:
+            direction = "left"
+        elif dx > 0.5:
+            direction = "right"
+        if direction is not None:
+            cursor.step(direction)
+            self.pad_nav_cooldown = 0.22
+
     # ------------------------------------------------------------ gameplay
     def mouse_logical(self):
         """Window mouse position in logical UI coordinates (window pixels
@@ -1101,8 +1648,11 @@ class App:
         aim_x, aim_y = self.mouse_logical()
         mouse_fire = pygame.mouse.get_pressed()[0]
         # relative mouse motion, consumed every frame; only applied by
-        # mouse-look games (grab is on for those)
-        rel_dx = pygame.mouse.get_rel()[0]
+        # mouse-look games (grab is on for those). Also the one place any
+        # mouse motion is visible at all, so a tabletop pad cursor (CAB-23)
+        # piggybacks here to know when to hide itself for the mouse.
+        rel_dx, rel_dy = pygame.mouse.get_rel()
+        self._mouse_moved = bool(rel_dx or rel_dy)
         sens = self.profile["settings"].get("mouse_sens", 1.0)
         look_dx = rel_dx * sens if self.game.INFO.mouse_look else 0.0
 
@@ -1129,7 +1679,21 @@ class App:
     def update_playing(self, dt):
         run = self.run
         inp = self.gameplay_input()
+        cursor = getattr(run, "pad_cursor", None)
+        if cursor is not None and self._mouse_moved:
+            cursor.hide()
+        if self.pilot is not None:
+            if self._pilot_real_input(inp):
+                self._handback_pilot()
+            else:
+                pilot_inp = self.pilot.step(run, dt)
+                if pilot_inp is not None:
+                    inp = pilot_inp
+                run.pilot_touched = True
+                self.pilot_watch += dt
+                self._check_cabinet_man_achievements()
         run.update(dt, inp)
+        self._track_tag_team(run)
         self.run_elapsed += dt
         if self.replay_rec is not None:
             self.replay_rec.on_frame(dt, inp)
@@ -1157,10 +1721,13 @@ class App:
                 self.run_won = data["win"]
 
         self.run_stats_tracker.on_frame(dt, frame_events)
-        for achievement in self.run_engine.on_frame(frame_events, run.run_stats()):
-            self.toasts.append([achievement, 3.5])
-            self.audio.play("toast")
-            self.save_profile()
+        # Cabinet Man is a showman, not a booster: no achievement unlocks from
+        # any run a pilot has driven any part of.
+        if not suppress_for_pilot(run):
+            for achievement in self.run_engine.on_frame(frame_events, run.run_stats()):
+                self.toasts.append([achievement, 3.5])
+                self.audio.play("toast")
+                self.save_profile()
 
         if hasattr(run, "per_frame_particles"):
             run.per_frame_particles(self.renderer, random)
@@ -1168,16 +1735,28 @@ class App:
         if self.run_summary is not None and self.state == PLAYING:
             self.state = RUN_END
             self.audio.music(None)
+            # stamp the run-end time so a quick slip into ambient can earn the
+            # "Take a Break" mood achievement
+            profile_mod.ambient_section(self.profile)["counters"][
+                "last_run_end_ts"] = time.time()
             score = self.run_summary["score"]
             if self.ghost_rec is not None and self.ghost_rec.samples:
                 ghost = self.ghost_rec.build(self.game_id, self.run_mode, score)
                 if ghost_mod.maybe_store_best(self.ghosts, ghost):
                     self.post_banner("NEW GHOST SAVED", 2.0)
+            pilot_touched = suppress_for_pilot(run)
             if self.replay_rec is not None and self.replay_rec.frame_count:
                 self.last_replay = self.replay_rec.build(score)
+                if pilot_touched:
+                    self.last_replay["pilot"] = True
                 replay_mod.save_last(self.last_replay)
             self.export_status = ""
-            if self.mp is not None:
+            # Score integrity: a pilot-driven run still plays and records a
+            # local replay (marked above), but never submits a high score —
+            # showmanship, not a shortcut to the leaderboard.
+            if pilot_touched:
+                pass
+            elif self.mp is not None:
                 # session runs report to the lobby, not the initials flow;
                 # queued so a dropped connection still lands the score
                 self.outbox.queue_session_score(
@@ -1188,6 +1767,11 @@ class App:
                 if "wave_reached" in self.run_summary:
                     extra["wave"] = self.run_summary["wave_reached"]
                 self.pending_board = (self.game_id, self.run_mode, score, extra)
+            # session best (Cabinet Man's "tag_team"): only the player's own
+            # clean runs set the bar, so beating it later is always their doing.
+            if not pilot_touched:
+                self.session_best[self.game_id] = max(
+                    self.session_best.get(self.game_id, 0), score)
             self.save_profile()
 
     def draw_ghost_pace(self, o):
@@ -1349,15 +1933,24 @@ class App:
         o = self.renderer.overlay
         module = self.game
         engine = self.run_engine or self.engine_for_current_game()
-        o.text(f"{module.INFO.name} — ACHIEVEMENTS", self.W / 2, 55, size=32,
+        o.text(f"{module.INFO.name} — ACHIEVEMENTS", self.W / 2, 46, size=32,
                color=EMBER, center=True)
+        # cabinet-wide roll-up: how far through EVERYTHING (CAB-26)
+        comp = completion_mod.completion(self.profile, self.games)
+        earned, total = comp["total"]
+        o.text(completion_mod.completion_line(comp), self.W / 2, 90, size=16,
+               color=GOLD, center=True)
+        bar_w, bar_x = 380, self.W / 2 - 190
+        frac = (earned / total) if total else 0.0
+        o.rect(bar_x, 114, bar_w, 8, BAR_BG)
+        o.rect(bar_x, 114, bar_w * frac, 8, GOLD)
         col_w = 590
         run_stats = self.run.run_stats() if self.run else {}
         for i, a in enumerate(module.ACHIEVEMENTS):
             col = i % 2
             row = i // 2
             x = 60 + col * col_w
-            y = 118 + row * 98
+            y = 140 + row * 98
             unlocked = engine.is_unlocked(a.id)
             o.rect(x, y, col_w - 40, 84, PANEL_DIM)
             o.rect(x, y, 4, 84, GOLD if unlocked else HAIR)
@@ -1383,41 +1976,57 @@ class App:
         life = self.section["lifetime"]
         o.text(f"{self.game.INFO.name} — SERVICE RECORD", self.W / 2, 70,
                size=32, color=EMBER, center=True)
-        acc = (life["hits"] / life["shots"]) if life["shots"] else 0.0
-        hours = life["playtime"] / 3600
-        rows = [
-            ("Best score", f"{life['best_score']:,}"),
-            ("Best wave", f"{life['best_wave']}" if life["best_wave"] else "-"),
-            ("Runs / wins", f"{life['runs']} / {life['wins']}"),
-            ("Bosses slain", f"{life['bosses']}"),
-            ("Enemies destroyed", f"{life['kills']:,}"),
-            ("Shots fired", f"{life['shots']:,}"),
-            ("Lifetime accuracy", f"{acc:.0%}"),
-            ("Bullets grazed", f"{life['grazes']:,}"),
-            ("Power-ups collected", f"{life['powerups']:,}"),
-            ("Times shot down", f"{life['deaths']}"),
-            ("Time in the chair", f"{hours:.1f}h"),
-        ]
+        stats_rows = getattr(self.game, "STATS_ROWS", None)
+        if stats_rows is not None:
+            # game-specific lifetime rows (tabletop games have no runs/kills)
+            rows = resolve_stats_rows(stats_rows, life)
+        else:
+            acc = (life["hits"] / life["shots"]) if life["shots"] else 0.0
+            hours = life["playtime"] / 3600
+            rows = [
+                ("Best score", f"{life['best_score']:,}"),
+                ("Best wave", f"{life['best_wave']}" if life["best_wave"] else "-"),
+                ("Runs / wins", f"{life['runs']} / {life['wins']}"),
+                ("Bosses slain", f"{life['bosses']}"),
+                ("Enemies destroyed", f"{life['kills']:,}"),
+                ("Shots fired", f"{life['shots']:,}"),
+                ("Lifetime accuracy", f"{acc:.0%}"),
+                ("Bullets grazed", f"{life['grazes']:,}"),
+                ("Power-ups collected", f"{life['powerups']:,}"),
+                ("Times shot down", f"{life['deaths']}"),
+                ("Time in the chair", f"{hours:.1f}h"),
+            ]
         for i, (label, value) in enumerate(rows):
             y = 160 + i * 46
             o.text(label, self.W / 2 - 280, y, size=20, color=DIM)
             o.text(value, self.W / 2 + 120, y, size=20, color=TEXT)
+        # cabinet-wide achievement roll-up (CAB-26), one cheap footer line
+        comp = completion_mod.completion(self.profile, self.games)
+        o.text(completion_mod.completion_line(comp), self.W / 2, self.H - 54,
+               size=15, color=GOLD, center=True)
         o.text("Esc: back", self.W / 2, self.H - 30, size=14, color=DIM, center=True)
 
     def draw_settings(self):
         o = self.renderer.overlay
         s = self.profile["settings"]
-        o.text("SETTINGS", self.W / 2, 80, size=44, color=EMBER, center=True)
+        o.text("SETTINGS", self.W / 2, 70, size=40, color=EMBER, center=True)
         for i, (label, key, choices) in enumerate(SETTINGS_ROWS):
-            y = 190 + i * 52
+            y = 132 + i * 36
             selected = i == self.settings_index
             color = TEXT if selected else DIM
             prefix = "> " if selected else "  "
-            o.text(prefix + label, self.W / 2 - 330, y, size=24, color=color)
-            value = settings_value_label(key, s[key])
+            o.text(prefix + label, self.W / 2 - 330, y, size=20, color=color)
+            if choices == "action":
+                value = "▶ press" if not (key == "import_profile"
+                                          and self._import_armed) else "confirm?"
+            else:
+                value = settings_value_label(key, s[key])
             o.text(f"< {value} >" if selected else value,
-                   self.W / 2 + 160, y, size=24,
+                   self.W / 2 + 160, y, size=20,
                    color=GOLD if selected else DIM)
+        if self.settings_msg:
+            o.text(self.settings_msg, self.W / 2, self.H - 58, size=15,
+                   color=theme.GOOD, center=True)
         o.text("Left/Right: change   Esc: back",
                self.W / 2, self.H - 40, size=14, color=DIM, center=True)
 
@@ -1598,8 +2207,16 @@ class App:
             o.text(entry["name"], self.W / 2 - 220, y, size=24, color=color)
             o.text(f"{entry['score']:,}", self.W / 2 + 40, y, size=24, color=color)
             o.text(entry.get("date", ""), self.W / 2 + 220, y, size=16, color=DIM)
-        o.text("Esc: back", self.W / 2, self.H - 30, size=14, color=DIM,
-               center=True)
+        pending = outbox_mod.pending_count(self.profile)
+        if pending:
+            o.text(outbox_mod.status_line(pending, self.net.available),
+                   self.W / 2, self.H - 54, size=15, color=theme.GOLD, center=True)
+        if self.share_prompt is not None:
+            o.text("Share this run's replay?  Y: yes   N: no   (Esc also declines)",
+                   self.W / 2, self.H - 30, size=16, color=GOLD, center=True)
+        else:
+            o.text("Esc: back", self.W / 2, self.H - 30, size=14, color=DIM,
+                   center=True)
         self.draw_banner_and_toasts()
 
     def draw_replays(self):
@@ -1607,13 +2224,29 @@ class App:
         accent = theme.for_game(self.game_id).accent
         o.text(f"{self.game.INFO.name} — REPLAYS", self.W / 2, 66, size=32,
                color=EMBER, center=True)
+        if self.net.available:
+            tab_label = "LOCAL" if self.replay_tab == "local" else "SHARED"
+            o.text(f"[{tab_label}]  Left/Right: switch", self.W / 2, 96,
+                   size=14, color=INFO, center=True)
         o.text("Watch a saved run back — with its real music and sound",
                self.W / 2, 112, size=14, color=DIM, center=True)
 
-        lst = self.replays_list
+        shared = self.replay_tab == "shared"
+        lst = self._replays_current_list()
         if not lst:
-            o.text("NO REPLAYS YET — PLAY A RUN", self.W / 2, self.H / 2,
-                   size=22, color=DIM, center=True)
+            if shared and not self.net.available:
+                o.text("OFFLINE — couldn't reach the arcade server",
+                       self.W / 2, self.H / 2, size=18, color=DANGER, center=True)
+            elif shared and any(self.shared_replays.get((self.game_id, m)) == "pending"
+                                for m, _ in self.game.INFO.modes):
+                o.text("FETCHING...", self.W / 2, self.H / 2, size=22,
+                       color=DIM, center=True)
+            elif shared:
+                o.text("NO SHARED REPLAYS YET", self.W / 2, self.H / 2,
+                       size=22, color=DIM, center=True)
+            else:
+                o.text("NO REPLAYS YET — PLAY A RUN", self.W / 2, self.H / 2,
+                       size=22, color=DIM, center=True)
         modes = dict(self.game.INFO.modes)
         panel_x = self.W / 2 - 420
         top, row_h, maxrows = 168, 46, 10
@@ -1627,19 +2260,30 @@ class App:
                 o.rect(panel_x - 12, y - 8, 864, 40, PANEL_SEL)
             col = TEXT if selected else DIM
             mode_label = modes.get(entry["mode"], entry["mode"].upper())
-            dur = _fmt_clock(entry["duration"])
             o.text(("> " if selected else "  ") + mode_label, panel_x, y,
                    size=20, color=accent if selected else col)
             o.text(f"{entry['score']:,}", panel_x + 250, y, size=20, color=col)
-            o.text(dur, panel_x + 430, y, size=18, color=DIM)
-            o.text(entry["created"][:10], panel_x + 545, y, size=15, color=DIM)
-            o.text("KEPT" if entry["kept"] else "LAST", panel_x + 735, y,
-                   size=14, color=GOLD if entry["kept"] else theme.FAINT)
+            if shared:
+                o.text(entry.get("name", ""), panel_x + 430, y, size=18, color=col)
+                o.text(entry.get("date", "")[:10], panel_x + 620, y, size=15,
+                       color=DIM)
+            else:
+                dur = _fmt_clock(entry["duration"])
+                o.text(dur, panel_x + 430, y, size=18, color=DIM)
+                o.text(entry["created"][:10], panel_x + 545, y, size=15, color=DIM)
+                if entry.get("verified"):
+                    o.text("VERIFIED", panel_x + 645, y, size=12, color=theme.GOOD)
+                o.text("KEPT" if entry["kept"] else "LAST", panel_x + 735, y,
+                       size=14, color=GOLD if entry["kept"] else theme.FAINT)
 
-        o.text("Enter: watch   G: GIF   V: MP4   O: open exports   Esc: back",
-               self.W / 2, self.H - 78, size=15, color=EMBER, center=True)
-        o.text("exports → " + os.path.join(self._repo_dir(), "exports"),
-               self.W / 2, self.H - 52, size=12, color=theme.FAINT, center=True)
+        if shared:
+            o.text("Enter: watch   Left/Right: switch   Esc: back",
+                   self.W / 2, self.H - 78, size=15, color=EMBER, center=True)
+        else:
+            o.text("Enter: watch   G: GIF   V: MP4   O: open exports   Esc: back",
+                   self.W / 2, self.H - 78, size=15, color=EMBER, center=True)
+            o.text("exports → " + os.path.join(self._repo_dir(), "exports"),
+                   self.W / 2, self.H - 52, size=12, color=theme.FAINT, center=True)
         if self.export_status:
             o.text(self.export_status, self.W / 2, self.H - 30, size=14,
                    color=theme.GOOD, center=True)
@@ -1686,6 +2330,36 @@ class App:
             o.text(self.export_status, self.W / 2, self.H - 30, size=14,
                    color=theme.GOOD, center=True)
 
+    def draw_ambient_edit(self, o):
+        """The manual-mode customization panel — the only chrome allowed in
+        manual ambient, and dismissible back to clean."""
+        p = self.ambient.preset
+        vals = {
+            "Scene": p.scene,
+            "Palette": self._palette_name(p.palette),
+            "Speed": f"{p.speed:.1f}x",
+            "Density": p.density,
+            "Sound": p.sound,
+            "Dim": f"{int(p.dim * 100)}%",
+        }
+        x, y0 = 80, 210
+        pw, ph = 500, 70 + len(AMBIENT_EDIT_ROWS) * 40 + 78
+        o.rect(x - 26, y0 - 44, pw, ph, PANEL)
+        o.rect(x - 26, y0 - 44, 4, ph, GOLD)
+        o.text("CUSTOMIZE AMBIENT", x, y0 - 26, size=20, color=EMBER)
+        for i, row in enumerate(AMBIENT_EDIT_ROWS):
+            yy = y0 + 20 + i * 40
+            sel = i == self.ambient_edit_row
+            o.text(("> " if sel else "  ") + row, x, yy, size=18,
+                   color=TEXT if sel else DIM)
+            o.text(f"< {vals[row]} >" if sel else vals[row], x + 210, yy,
+                   size=18, color=GOLD if sel else DIM)
+        hy = y0 + 20 + len(AMBIENT_EDIT_ROWS) * 40 + 10
+        o.text("Up/Down: pick   Left/Right: change   Enter: save slot   Tab: close",
+               x, hy, size=13, color=DIM)
+        if self.ambient_saved_msg:
+            o.text(self.ambient_saved_msg, x, hy + 24, size=15, color=theme.GOOD)
+
     def draw_attract_overlay(self):
         o = self.renderer.overlay
         module = self.games[self.attract_gid]
@@ -1700,8 +2374,14 @@ class App:
         if math.sin(self.renderer.time * 3) > -0.2:
             o.text("PRESS ANY KEY", self.W / 2, self.H * 0.62, size=36,
                    color=TEXT, center=True)
-        o.text(f"DEMO — {module.INFO.name}", self.W / 2, self.H - 44, size=16,
-               color=DIM, center=True)
+        if self.attract_is_pilot:
+            # persona caption: Cabinet Man is starring this idle cycle
+            pulse = int(180 + 60 * abs(math.sin(self.renderer.time * 2.5)))
+            o.text(cabinet_man_mod.ATTRACT_CAPTION, self.W / 2, self.H - 44,
+                   size=16, color=(255, 200, 60, pulse), center=True)
+        else:
+            o.text(f"DEMO — {module.INFO.name}", self.W / 2, self.H - 44,
+                   size=16, color=DIM, center=True)
 
     def draw_fps(self):
         o = self.renderer.overlay
@@ -1728,6 +2408,8 @@ class App:
         elif self.state == REPLAYING and self.replay_view is not None:
             rv = self.replay_view
             rv["run"].draw(self.renderer, rv["section"])
+        elif self.state == AMBIENT:
+            self.ambient.draw(self.renderer)
         elif self.state == MENU:
             aspect = self.renderer.width / self.renderer.height
             if aspect >= 1.25:  # narrow/square screens: menu panel only
@@ -1777,6 +2459,7 @@ class App:
             self.run.draw_hud(o, hud_w, self.H, self.section)
             o.offset_x = 0.0
             self.draw_ghost_pace(o)
+            self._draw_pilot_badge(o)
             self.draw_banner_and_toasts()
             if self.state == PAUSED:
                 self.draw_paused()
@@ -1808,6 +2491,12 @@ class App:
             self.draw_replays()
         elif self.state == REPLAYING:
             self.draw_replay_overlay()
+        elif self.state == AMBIENT:
+            self.ambient.draw_overlay(self.renderer.overlay, self.W, self.H,
+                                      self.entered_auto)
+            if self.ambient_edit:
+                self.draw_ambient_edit(self.renderer.overlay)
+            self.draw_banner_and_toasts()  # celebrate a mood-achievement unlock
         elif self.state == ATTRACT:
             self.draw_attract_overlay()
         if self.profile["settings"].get("show_fps"):
@@ -1840,6 +2529,7 @@ class App:
                     self.renderer.resize(event.w, event.h)
 
             self.poll_pad_navigation(dt)
+            self.poll_pad_cursor(dt)
             self.poll_network()
             self._poll_exports()
             self.outbox_timer -= dt
@@ -1858,10 +2548,19 @@ class App:
                 self.update_replay(dt)
             elif self.state == ATTRACT:
                 self.update_attract(dt)
+            elif self.state == AMBIENT:
+                self.update_ambient(dt)
             elif self.state == MENU:
                 self.idle_timer += dt
                 if self.idle_timer >= ATTRACT_IDLE_SECONDS:
-                    self.start_attract()
+                    # idle behaviour is a setting: attract / ambient / off
+                    target = ambient_preset.idle_target(
+                        self.profile["settings"].get("idle_screen", "attract"))
+                    if target == "attract":
+                        self.start_attract()
+                    elif target == "ambient":
+                        self.start_ambient(auto=True)
+                    # "off": stay on the menu (nothing to do)
 
             # cursor + mouse grab: FPS games hide the pointer while playing;
             # mouse-look games (Doom) also grab so relative motion keeps
@@ -1871,7 +2570,8 @@ class App:
             # a live run grabs the mouse — a replay is a scripted spectator view
             watching_fps = self.state in (PLAYING, REPLAYING) and (
                 info.mouse_aim or info.mouse_look)
-            pygame.mouse.set_visible(not watching_fps)
+            pygame.mouse.set_visible(
+                not (watching_fps or self.state == AMBIENT))
             pygame.event.set_grab(self.state == PLAYING and info.mouse_look)
 
             self.renderer.begin(dt if self.state != PAUSED else 0.0)

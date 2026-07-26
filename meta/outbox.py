@@ -2,22 +2,59 @@
 are queued in the profile and retried on the next successful contact —
 so away-from-home runs still land on the global boards eventually.
 
-Items: {"id", "type": "score"|"session", "game", "mode", "code",
-        "name", "score", "wave", "date"}
+Items: {"id", "type": "score"|"session"|"replay", "game", "mode", "code",
+        "name", "score", "wave", "path", "date"}
 Kept on network failure, dropped on success or definitive 4xx rejection
-(e.g. an expired session).
+(e.g. an expired session, or CAB-14's "not top-10 yet" replay-upload gate).
+A "replay" item stores only the local file `path`, not the (up to ~256KB)
+payload itself — the file is read fresh at drain time so the outbox never
+bloats profile.json with replay data.
 """
+import json
 import uuid
 from datetime import datetime, timezone
 
 MAX_ITEMS = 50
 
 
+# --------------------------------------------------- visibility (CAB-28)
+def pending_count(profile):
+    """How many score submissions are queued waiting for the server."""
+    return len(profile.get("outbox", []))
+
+
+def status_line(pending, available):
+    """The leaderboard status line for a non-empty outbox, or "" when nothing
+    is pending. Reflects the online/offline state the client already knows."""
+    if pending <= 0:
+        return ""
+    conn = "online" if available else "offline"
+    s = "s" if pending != 1 else ""
+    return f"{pending} score{s} waiting to sync ({conn}) · R: retry now"
+
+
+def retry_summary(before, after, available):
+    """A short toast after a manual retry, from the pending counts before/after
+    the flush and whether the server is reachable. A 4xx-rejected item leaves
+    the queue too, so 'sent' here means 'left the queue', which the caller
+    words as synced when online."""
+    sent = max(0, before - after)
+    if after == 0 and sent:
+        return f"Synced {sent} pending score{'s' if sent != 1 else ''}."
+    if sent:
+        return f"Sent {sent}, {after} still queued."
+    if not available:
+        return "Offline — scores stay queued until the server is reachable."
+    return f"Retrying {after} pending score{'s' if after != 1 else ''}…"
+
+
 class Outbox:
-    def __init__(self, profile, net, on_rank=None, save_cb=None):
+    def __init__(self, profile, net, on_rank=None, on_replay_uploaded=None,
+                save_cb=None):
         self.profile = profile
         self.net = net
         self.on_rank = on_rank or (lambda rank: None)
+        self.on_replay_uploaded = on_replay_uploaded or (lambda item, rid: None)
         self.save_cb = save_cb or (lambda: None)
         self.inflight = set()
 
@@ -33,6 +70,13 @@ class Outbox:
         self._enqueue({"type": "session", "code": code, "name": name,
                        "score": int(score), "wave": wave})
 
+    def queue_replay(self, game, mode, name, score, path):
+        """Queue a replay upload alongside its (already-submitted) score —
+        see the module docstring for why only `path` is stored, not the
+        payload."""
+        self._enqueue({"type": "replay", "game": game, "mode": mode,
+                       "name": name, "score": int(score), "path": path})
+
     def _enqueue(self, item):
         item["id"] = uuid.uuid4().hex[:12]
         item["date"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -40,6 +84,18 @@ class Outbox:
         del self.items[:-MAX_ITEMS]  # cap oldest-first
         self.save_cb()
         self.drain()
+
+    def _replay_payload(self, item):
+        """Re-read the replay file at drain time (never persisted in the
+        outbox itself). None if the file's gone missing or is unreadable —
+        the caller drops the item outright since there's nothing to retry."""
+        try:
+            with open(item["path"], "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return {"game": item["game"], "mode": item["mode"],
+                "name": item["name"], "score": item["score"], "replay": data}
 
     def drain(self):
         """Fire pending submissions (skipping ones already in flight)."""
@@ -53,10 +109,18 @@ class Outbox:
             if item["type"] == "score":
                 self.net.submit_score(item["game"], item["mode"], item["name"],
                                       item["score"], item.get("wave"), tag=tag)
-            else:
+            elif item["type"] == "session":
                 self.net.submit_session_score(item["code"], item["name"],
                                               item["score"], item.get("wave"),
                                               tag=tag)
+            else:  # "replay"
+                payload = self._replay_payload(item)
+                if payload is None:
+                    self.inflight.discard(item["id"])
+                    self.items.remove(item)
+                    self.save_cb()
+                    continue
+                self.net.upload_replay(payload, tag=tag)
 
     def handle_result(self, tag, payload):
         """Feed ("outbox", id) results from ArcadeClient.poll() here."""
@@ -70,8 +134,13 @@ class Outbox:
         status = payload.get("__status__") if isinstance(payload, dict) else None
         if status is not None and not (400 <= status < 500):
             return  # 5xx: server hiccup, retry later
-        # success or definitive 4xx rejection: either way it leaves the queue
+        # success or definitive 4xx rejection (incl. CAB-14's "not top-10
+        # yet" replay gate): either way it leaves the queue
         self.items.remove(item)
         self.save_cb()
-        if status is None and item["type"] == "score" and "rank" in payload:
+        if status is not None:
+            return
+        if item["type"] == "score" and "rank" in payload:
             self.on_rank(payload["rank"])
+        elif item["type"] == "replay" and "id" in payload:
+            self.on_replay_uploaded(item, payload["id"])
