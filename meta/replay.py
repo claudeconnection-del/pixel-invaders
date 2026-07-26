@@ -254,6 +254,7 @@ def _meta(path):
         "created": data.get("created", ""),
         # the always-overwritten "last run" copy vs. a player-kept keeper
         "kept": not name.startswith("last_"),
+        "verified": bool(data.get("verified")),
         "mtime": os.path.getmtime(path),
     }
 

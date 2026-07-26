@@ -9,6 +9,7 @@ Cabinet controls:
 Game controls are per-game (Voxel Hell: Space fire, Shift focus).
 """
 import copy
+import json
 import math
 import os
 import random
@@ -113,6 +114,7 @@ SETTINGS_ROWS = [
     ("Music volume", "music_vol", "float"),
     ("SFX volume", "sfx_vol", "float"),
     ("Show FPS", "show_fps", [False, True]),
+    ("Share replays", "share_replays", ["ask", "always", "never"]),
     ("Export profile", "export_profile", "action"),
     ("Import profile", "import_profile", "action"),
 ]
@@ -222,8 +224,9 @@ class App:
         # offline score outbox: queued submissions retried on next contact
         self.outbox = Outbox(
             self.profile, self.net,
-            on_rank=lambda rank: (self.post_banner(f"GLOBAL RANK #{rank}", 3.0),
-                                  self.audio.play("toast")),
+            on_rank=self._on_score_synced,
+            on_replay_uploaded=lambda item, rid: (
+                self.post_banner("REPLAY SHARED", 2.0), self.audio.play("toast")),
             save_cb=self.save_profile)
         self.outbox_timer = 5.0  # first drain shortly after boot
 
@@ -242,6 +245,10 @@ class App:
         self.replays_list = []      # metadata for the browser screen
         self.replays_index = 0
         self.replay_view = None     # active in-engine playback, or None
+        self.replay_tab = "local"   # local | shared (CAB-15)
+        self.shared_replays = {}    # (game, mode) -> list | "pending" | "error"
+        self.share_prompt = None    # (game, mode, name, score, path) awaiting Y/N
+        self._pending_share = None  # queued once its score outbox item syncs
 
         # ambient mode: a calm generative screen (idle-fade or manual)
         self.ambient = AmbientMode(self._current_ambient_preset())
@@ -523,6 +530,14 @@ class App:
             return
 
         if self.state == LEADERBOARD:
+            if self.share_prompt is not None and key in (pygame.K_y, pygame.K_n):
+                if key == pygame.K_y:
+                    self._share_replay_now(self.share_prompt)
+                    audio.play("menu_select")
+                else:
+                    audio.play("menu_move")
+                self.share_prompt = None
+                return
             modes = self.game.INFO.modes
             if key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d) \
                     and len(modes) > 1:
@@ -543,6 +558,7 @@ class App:
                 audio.play("menu_select")
             elif key in (pygame.K_ESCAPE, pygame.K_RETURN):
                 self.last_rank = None
+                self.share_prompt = None
                 self.state = MENU
                 self.audio.music("menu")
             return
@@ -611,18 +627,31 @@ class App:
             return
 
         if self.state == REPLAYS:
-            lst = self.replays_list
-            if key in (pygame.K_UP, pygame.K_w) and lst:
+            lst = self._replays_current_list()
+            if key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d) \
+                    and self.net.available:
+                self.replay_tab = "shared" if self.replay_tab == "local" else "local"
+                self.replays_index = 0
+                audio.play("menu_move")
+                if self.replay_tab == "shared":
+                    self._request_shared_replays()
+            elif key in (pygame.K_UP, pygame.K_w) and lst:
                 self.replays_index = (self.replays_index - 1) % len(lst)
                 audio.play("menu_move")
             elif key in (pygame.K_DOWN, pygame.K_s) and lst:
                 self.replays_index = (self.replays_index + 1) % len(lst)
                 audio.play("menu_move")
             elif key == pygame.K_RETURN and lst:
-                self.start_replay(lst[self.replays_index]["path"])
-            elif key == pygame.K_g and lst:
+                if self.replay_tab == "local":
+                    self.start_replay(lst[self.replays_index]["path"])
+                else:
+                    entry = lst[self.replays_index]
+                    self.export_status = "Fetching replay..."
+                    self.net.fetch_replay(entry["id"],
+                                          tag=("replay_fetch", entry["id"]))
+            elif key == pygame.K_g and lst and self.replay_tab == "local":
                 self._spawn_export("gif", lst[self.replays_index])
-            elif key == pygame.K_v and lst:
+            elif key == pygame.K_v and lst and self.replay_tab == "local":
                 self._spawn_export("mp4", lst[self.replays_index])
             elif key == pygame.K_o:
                 self._open_exports_folder()
@@ -1023,6 +1052,7 @@ class App:
         """Enter the replay browser for the current game (newest first)."""
         self.replays_list = replay_mod.list_for_game(self.game_id)
         self.replays_index = 0
+        self.replay_tab = "local"
         self.export_status = ""
         self.state = REPLAYS
         self.audio.music("menu")
@@ -1112,6 +1142,7 @@ class App:
         self.last_rank = lb.submit(self.profile, game_id, mode, name, score, extra)
         # global submission goes through the outbox: survives being offline
         self.outbox.queue_score(game_id, mode, name, score, extra.get("wave"))
+        self._offer_replay_share(game_id, mode, name, score)
         self.pending_board = None
         self.board_scope = "local"
         self.board_mode_index = next(
@@ -1119,6 +1150,78 @@ class App:
         self.save_profile()
         self.audio.play("toast")
         self.state = LEADERBOARD
+
+    # --------------------------------------------------- replay share (CAB-15)
+    def _offer_replay_share(self, game_id, mode, name, score):
+        """A qualifying run's replay can ride along with its score submission.
+        `always` shares silently (queued behind the score, see
+        `_on_score_synced`); `ask` shows a Y/N prompt on the leaderboard;
+        `never` skips entirely. Never touches a replay from a different
+        game/mode (a stale `self.last_replay` from an earlier run)."""
+        rep = self.last_replay
+        if rep is None or rep.get("game") != game_id or rep.get("mode") != mode:
+            return
+        pending = (game_id, mode, name, int(score), replay_mod.last_path(game_id, mode))
+        pref = self.profile["settings"].get("share_replays", "ask")
+        if pref == "always":
+            self._pending_share = pending
+        elif pref == "ask":
+            self.share_prompt = pending
+
+    def _share_replay_now(self, pending):
+        """Arm the replay to upload once its score's outbox item confirms
+        synced (`_on_score_synced`) — CAB-14's server only accepts a replay
+        upload once the matching score is already visible top-10, so we never
+        race the two submissions."""
+        self._pending_share = pending
+
+    def _on_score_synced(self, rank):
+        self.post_banner(f"GLOBAL RANK #{rank}", 3.0)
+        self.audio.play("toast")
+        if self._pending_share is not None:
+            game_id, mode, name, score, path = self._pending_share
+            self._pending_share = None
+            self.outbox.queue_replay(game_id, mode, name, score, path)
+
+    def _request_shared_replays(self):
+        """Fetch every mode's shared-replay list for the current game (the
+        Theater has no separate mode selector, so all modes are merged)."""
+        if not self.net.available:
+            return
+        for mode_id, _ in self.game.INFO.modes:
+            key = (self.game_id, mode_id)
+            if self.shared_replays.get(key) in (None, "error"):
+                self.shared_replays[key] = "pending"
+                self.net.fetch_replays(self.game_id, mode_id)
+
+    def _shared_replays_combined(self):
+        combined = []
+        for mode_id, _ in self.game.INFO.modes:
+            data = self.shared_replays.get((self.game_id, mode_id))
+            if isinstance(data, list):
+                combined.extend(dict(e, mode=mode_id) for e in data)
+        combined.sort(key=lambda e: e.get("score", 0), reverse=True)
+        return combined
+
+    def _replays_current_list(self):
+        return (self.replays_list if self.replay_tab == "local"
+               else self._shared_replays_combined())
+
+    def _cache_shared_replay(self, replay_id, data):
+        """Downloaded shared replays land in their own subfolder so they never
+        collide with (or get mistaken for) this cabinet's own local replays."""
+        directory = os.path.join(replay_mod.REPLAY_DIR, "shared")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{replay_id}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return path
+
+    def _on_shared_replay_fetched(self, replay_id, payload):
+        if payload is None:
+            self.export_status = "Could not fetch that replay (offline?)"
+            return
+        self.start_replay(self._cache_shared_replay(replay_id, payload))
 
     def _request_global_board(self):
         modes = self.game.INFO.modes
@@ -1138,6 +1241,14 @@ class App:
                     self.global_boards[key] = "error"
                 else:
                     self.global_boards[key] = payload.get("scores", [])
+            elif isinstance(tag, tuple) and tag[0] == "replays":
+                key = (tag[1], tag[2])
+                if payload is None:
+                    self.shared_replays[key] = "error"
+                else:
+                    self.shared_replays[key] = payload.get("replays", [])
+            elif isinstance(tag, tuple) and tag[0] == "replay_fetch":
+                self._on_shared_replay_fetched(tag[1], payload)
             elif tag == "submit" and payload is not None:
                 self.post_banner(f"GLOBAL RANK #{payload['rank']}", 3.0)
                 self.audio.play("toast")
@@ -2061,8 +2172,12 @@ class App:
         if pending:
             o.text(outbox_mod.status_line(pending, self.net.available),
                    self.W / 2, self.H - 54, size=15, color=theme.GOLD, center=True)
-        o.text("Esc: back", self.W / 2, self.H - 30, size=14, color=DIM,
-               center=True)
+        if self.share_prompt is not None:
+            o.text("Share this run's replay?  Y: yes   N: no   (Esc also declines)",
+                   self.W / 2, self.H - 30, size=16, color=GOLD, center=True)
+        else:
+            o.text("Esc: back", self.W / 2, self.H - 30, size=14, color=DIM,
+                   center=True)
         self.draw_banner_and_toasts()
 
     def draw_replays(self):
@@ -2070,13 +2185,29 @@ class App:
         accent = theme.for_game(self.game_id).accent
         o.text(f"{self.game.INFO.name} — REPLAYS", self.W / 2, 66, size=32,
                color=EMBER, center=True)
+        if self.net.available:
+            tab_label = "LOCAL" if self.replay_tab == "local" else "SHARED"
+            o.text(f"[{tab_label}]  Left/Right: switch", self.W / 2, 96,
+                   size=14, color=INFO, center=True)
         o.text("Watch a saved run back — with its real music and sound",
                self.W / 2, 112, size=14, color=DIM, center=True)
 
-        lst = self.replays_list
+        shared = self.replay_tab == "shared"
+        lst = self._replays_current_list()
         if not lst:
-            o.text("NO REPLAYS YET — PLAY A RUN", self.W / 2, self.H / 2,
-                   size=22, color=DIM, center=True)
+            if shared and not self.net.available:
+                o.text("OFFLINE — couldn't reach the arcade server",
+                       self.W / 2, self.H / 2, size=18, color=DANGER, center=True)
+            elif shared and any(self.shared_replays.get((self.game_id, m)) == "pending"
+                                for m, _ in self.game.INFO.modes):
+                o.text("FETCHING...", self.W / 2, self.H / 2, size=22,
+                       color=DIM, center=True)
+            elif shared:
+                o.text("NO SHARED REPLAYS YET", self.W / 2, self.H / 2,
+                       size=22, color=DIM, center=True)
+            else:
+                o.text("NO REPLAYS YET — PLAY A RUN", self.W / 2, self.H / 2,
+                       size=22, color=DIM, center=True)
         modes = dict(self.game.INFO.modes)
         panel_x = self.W / 2 - 420
         top, row_h, maxrows = 168, 46, 10
@@ -2090,19 +2221,30 @@ class App:
                 o.rect(panel_x - 12, y - 8, 864, 40, PANEL_SEL)
             col = TEXT if selected else DIM
             mode_label = modes.get(entry["mode"], entry["mode"].upper())
-            dur = _fmt_clock(entry["duration"])
             o.text(("> " if selected else "  ") + mode_label, panel_x, y,
                    size=20, color=accent if selected else col)
             o.text(f"{entry['score']:,}", panel_x + 250, y, size=20, color=col)
-            o.text(dur, panel_x + 430, y, size=18, color=DIM)
-            o.text(entry["created"][:10], panel_x + 545, y, size=15, color=DIM)
-            o.text("KEPT" if entry["kept"] else "LAST", panel_x + 735, y,
-                   size=14, color=GOLD if entry["kept"] else theme.FAINT)
+            if shared:
+                o.text(entry.get("name", ""), panel_x + 430, y, size=18, color=col)
+                o.text(entry.get("date", "")[:10], panel_x + 620, y, size=15,
+                       color=DIM)
+            else:
+                dur = _fmt_clock(entry["duration"])
+                o.text(dur, panel_x + 430, y, size=18, color=DIM)
+                o.text(entry["created"][:10], panel_x + 545, y, size=15, color=DIM)
+                if entry.get("verified"):
+                    o.text("VERIFIED", panel_x + 645, y, size=12, color=theme.GOOD)
+                o.text("KEPT" if entry["kept"] else "LAST", panel_x + 735, y,
+                       size=14, color=GOLD if entry["kept"] else theme.FAINT)
 
-        o.text("Enter: watch   G: GIF   V: MP4   O: open exports   Esc: back",
-               self.W / 2, self.H - 78, size=15, color=EMBER, center=True)
-        o.text("exports → " + os.path.join(self._repo_dir(), "exports"),
-               self.W / 2, self.H - 52, size=12, color=theme.FAINT, center=True)
+        if shared:
+            o.text("Enter: watch   Left/Right: switch   Esc: back",
+                   self.W / 2, self.H - 78, size=15, color=EMBER, center=True)
+        else:
+            o.text("Enter: watch   G: GIF   V: MP4   O: open exports   Esc: back",
+                   self.W / 2, self.H - 78, size=15, color=EMBER, center=True)
+            o.text("exports → " + os.path.join(self._repo_dir(), "exports"),
+                   self.W / 2, self.H - 52, size=12, color=theme.FAINT, center=True)
         if self.export_status:
             o.text(self.export_status, self.W / 2, self.H - 30, size=14,
                    color=theme.GOOD, center=True)

@@ -67,6 +67,7 @@ DEFAULT_PROFILE = {
             "unlocked_felts": [],
         },
         "player_name": "AAA",  # arcade initials
+        "share_replays": "ask",  # ask | always | never (share a qualifying run's replay)
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8083
     },
     # Cabinet Man: cabinet-level achievement unlocks + counters (summons,

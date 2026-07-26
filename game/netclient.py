@@ -102,3 +102,21 @@ class ArcadeClient:
         if not self.available:
             return
         self._request("session_state", "GET", f"/api/v1/sessions/{code}")
+
+    # ------------------------------------------------------- replays (CAB-15)
+    def upload_replay(self, payload, tag="replay_up"):
+        if not self.available:
+            return
+        self._request(tag, "POST", "/replays", payload)
+
+    def fetch_replays(self, game, mode, tag=None):
+        if not self.available:
+            return
+        self._request(tag or ("replays", game, mode), "GET",
+                      f"/replays?game={game}&mode={mode}")
+
+    def fetch_replay(self, replay_id, tag=None):
+        if not self.available:
+            return
+        self._request(tag or ("replay", replay_id), "GET",
+                      f"/replays/{replay_id}")

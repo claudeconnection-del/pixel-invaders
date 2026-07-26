@@ -286,6 +286,12 @@ def main():
     board = entries(app.profile, "voxelhell", "campaign")
     assert len(board) == 1 and board[0]["score"] > 0
 
+    # replay share prompt (CAB-15): default "ask" pref offers to share the
+    # run's replay right on the leaderboard screen.
+    assert app.share_prompt is not None, "share prompt should appear (default: ask)"
+    assert app.share_prompt[0] == "voxelhell" and app.share_prompt[1] == app.run_mode
+    render_frame()                          # exercise the share-prompt draw path
+
     # outbox visibility (CAB-28): with the server unreachable (no base_url in
     # smoke), queued scores stay pending; the leaderboard surfaces the count +
     # R retries them.
@@ -303,11 +309,23 @@ def main():
     app.handle_keydown(pygame.K_r)          # retry now (offline -> stays queued)
     render_frame()
     assert app.wave_banner is not None      # retry feedback banner
+    banner_text = app.wave_banner[0].lower()
+    assert "queued" in banner_text or "offline" in banner_text or \
+        "retrying" in banner_text, banner_text
     assert _ob.pending_count(app.profile) == 2   # still queued while offline
+    # the R keypress must fall through to the retry path untouched — a share
+    # prompt (still pending here) is an overlay hint, not an input trap
+    assert app.share_prompt is not None, "R must not consume the share prompt"
+
+    # accepting the prompt arms the pending share (queued once its score
+    # outbox item syncs — needs a reachable server, so it just stays armed
+    # here); declining (or leaving) clears it without side effects.
+    app.handle_keydown(pygame.K_y)
+    assert app.share_prompt is None and app._pending_share is not None
     app.handle_keydown(pygame.K_ESCAPE)
     assert app.state == game_main.MENU
     print(f"initials + leaderboard OK (entry={board[0]['name']} "
-          f"{board[0]['score']}, {pend} pending surfaced)")
+          f"{board[0]['score']}, {pend} pending surfaced, replay share armed)")
 
     # replay theater: browse the saved replay and watch it back in-engine.
     # Re-sim playback must advance the run and stay a read-only spectator view
@@ -315,8 +333,15 @@ def main():
     app.game_id = "voxelhell"
     app.open_replays()
     assert app.state == game_main.REPLAYS
+    assert app.replay_tab == "local"
     assert app.replays_list, "replay browser found no replays"
     render_frame()                          # exercise the browser draw path
+
+    # SHARED tab (CAB-15): offline (no server configured in smoke), so the
+    # Left/Right toggle is gated off entirely — screen still renders fine.
+    app.handle_keydown(pygame.K_RIGHT)
+    assert app.replay_tab == "local", "tab must not switch while offline"
+    render_frame()
     app.handle_keydown(pygame.K_RETURN)     # watch the newest replay
     assert app.state == game_main.REPLAYING
     for _ in range(60 * 6):                 # up to 6s of playback

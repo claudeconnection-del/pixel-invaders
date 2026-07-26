@@ -279,6 +279,30 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   in `tools/test_cards.py`; per-game integration tests assert real gameplay actions (deal, draw,
   run-move, low-motion) queue the right flights with correct landing coordinates in
   `tools/test_cards.py` and `tools/test_rummy.py`; smoke stays green through solitaire + rummy.
+- **Replay share to leaderboard + shared theater tab (CAB-15).** ✅ `game/netclient.py` gained
+  `upload_replay`/`fetch_replays`/`fetch_replay` (same `_request`/tag/poll plumbing as
+  scores/sessions). A new `share_replays` setting (`ask` | `always` | `never`, default `ask`)
+  governs whether a qualifying run's replay rides along with its score: `ask` shows a
+  "Share this run's replay? Y/N" prompt on the leaderboard screen (Y/N only — every other key,
+  including R-retry and the scope toggle, still falls through untouched); `always` arms it
+  silently. Either way the replay is only *queued* once its score's own outbox item confirms
+  synced (`_on_score_synced`, fed by `Outbox`'s existing `on_rank` hook) — never alongside it —
+  so it can't race CAB-14's server-side "score must already be top-10" gate. `meta/outbox.py`
+  gained a third item type, `"replay"`: it stores only the local file *path* (not the payload,
+  which can run tens of KB) and re-reads it fresh at drain time, so the outbox never bloats
+  `profile.json`; a 4xx (including that gate) drops it like any other rejected item, with a new
+  `on_replay_uploaded` callback firing on success. Replay Theater gained a SHARED tab
+  (Left/Right, gated on `net.available`) that fetches every mode's list for the current game via
+  `fetch_replays`, merges + sorts by score, and downloads a selected entry via `fetch_replay`
+  into a new `replays/shared/<id>.json` cache before handing it to the existing playback path.
+  Local replays now show a VERIFIED badge (`meta/replay.py`'s `_meta()` surfaces the CAB-13
+  `verified` flag it already computed but never displayed). Tests: `Outbox` replay-item
+  queueing/drain-payload-shape/success-callback/unreadable-file-drop in `tools/test_meta.py`; a
+  new `tools/test_replay_integration.py` spins up the real FastAPI server (mirroring
+  `tools/test_integration.py`'s subprocess+`ArcadeClient`+`drain()` pattern) and drives a full
+  submit→upload→list→fetch round trip plus the orphan-score-gate rejection and offline
+  degradation; smoke covers the share prompt appearing, R-retry surviving it, Y arming the
+  share, and the SHARED tab's offline-gated path.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

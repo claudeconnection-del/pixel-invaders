@@ -320,6 +320,55 @@ def card_sfx_generation():
     print("card SFX generation OK (deterministic, non-silent, normalized)")
 
 
+def outbox_replay_upload():
+    from meta import outbox as outbox_mod
+
+    class _Net:
+        available = True
+        def __init__(self):
+            self.uploaded = []
+        def upload_replay(self, payload, tag=None):
+            self.uploaded.append((payload, tag))
+
+    # queueing a replay stores only the path, never the payload itself
+    net = _Net()
+    prof = {}
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "last_voxelhell_campaign.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"schema": 1, "game": "voxelhell", "seed": 1,
+                      "dts": [], "masks": [], "sig": "deadbeef"}, f)
+
+        ob = outbox_mod.Outbox(prof, net)
+        ob.queue_replay("voxelhell", "campaign", "AAA", 4200, path)
+        item = prof["outbox"][0]
+        assert item["type"] == "replay" and "replay" not in item and \
+            item["path"] == path
+
+        # drain reads the file fresh and posts {game,mode,name,score,replay}
+        payload, tag = net.uploaded[0]
+        assert payload["game"] == "voxelhell" and payload["score"] == 4200
+        assert payload["replay"]["sig"] == "deadbeef"
+        assert tag == ("outbox", item["id"])
+
+        # success: the item leaves the queue and the callback fires with the
+        # server-assigned id
+        got = {}
+        ob2 = outbox_mod.Outbox(prof, net,
+                                on_replay_uploaded=lambda it, rid: got.update(id=rid))
+        ob2.handle_result(("outbox", item["id"]), {"id": 77})
+        assert outbox_mod.pending_count(prof) == 0
+        assert got == {"id": 77}
+
+    # a missing/unreadable replay file is dropped outright (nothing to retry)
+    prof2 = {}
+    ob3 = outbox_mod.Outbox(prof2, net)
+    ob3.queue_replay("voxelhell", "campaign", "AAA", 1, "/no/such/file.json")
+    assert outbox_mod.pending_count(prof2) == 0
+    print("outbox replay upload OK (path-only queueing, drain payload shape, "
+          "success callback, unreadable-file drop)")
+
+
 def completion_summary():
     from meta import completion as comp_mod
 
@@ -389,6 +438,7 @@ if __name__ == "__main__":
     replay_canonicalization_stable_across_key_order()
     profile_export_import()
     outbox_visibility()
+    outbox_replay_upload()
     completion_summary()
     card_sfx_generation()
     print("ALL META TESTS PASSED")
