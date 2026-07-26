@@ -250,6 +250,17 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   ACHIEVEMENTS screen (header line + slim gold progress bar) and the STATS footer (one cheap line).
   Tests: rollup math / stale-id / zero-state / no-mutation in `tools/test_meta.py`; smoke asserts a
   real unlock moves the total and unknown ids are ignored.
+- **Card-table SFX set (CAB-19).** ✅ `tools/gen_sound.py` gained four generated builders —
+  `build_card_flip` (filtered-noise snap + pitch-tail), `build_card_place` (low thud + tick),
+  `build_card_shuffle` (~14 randomized flips riffling over 0.34s), `build_chip_stack` (2-3 ceramic
+  clicks) — all deterministic (fixed seeds) and peak-normalized to sit alongside the existing menu
+  set. Registered in `game/assets.py`'s `SFX` volume table and baked to
+  `assets/sfx/{card_flip,card_place,card_shuffle,chip_stack}.wav`. Wired into each game's
+  `on_event`: Solitaire (draw/undo→flip, move/home→place, deal→shuffle), Gin Rummy
+  (draw→flip, discard→place, deal→shuffle), Video Poker (deal→shuffle, hold/no-win draw→flip,
+  rebuy/win→chip_stack, alongside the existing win/powerup toast layer). Tests: generation
+  determinism/audibility/normalization in `tools/test_meta.py`; smoke stays green through the
+  event-driven paths.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

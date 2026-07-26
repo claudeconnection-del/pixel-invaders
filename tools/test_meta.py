@@ -296,6 +296,30 @@ def outbox_visibility():
     print("outbox visibility OK (pending count, status line, retry summary)")
 
 
+def card_sfx_generation():
+    from tools import gen_sound
+    builders = {
+        "card_flip": gen_sound.build_card_flip,
+        "card_place": gen_sound.build_card_place,
+        "card_shuffle": gen_sound.build_card_shuffle,
+        "chip_stack": gen_sound.build_chip_stack,
+    }
+    rendered = {}
+    for name, build in builders.items():
+        s1, s2 = build(), build()
+        assert s1 == s2, f"{name} not deterministic"           # fixed-seed
+        assert len(s1) > 200, f"{name} too short ({len(s1)})"   # real payload
+        peak = max(abs(x) for x in s1)
+        assert peak > 0.05, f"{name} silent (peak {peak})"      # audible
+        assert peak <= 1.0, f"{name} clips (peak {peak})"       # normalized
+        rendered[name] = s1
+    # the four are genuinely different effects, not the same buffer
+    assert len({tuple(s) for s in rendered.values()}) == 4
+    # shuffle is the busiest/longest of the set (a flurry of flips)
+    assert len(rendered["card_shuffle"]) >= len(rendered["card_flip"])
+    print("card SFX generation OK (deterministic, non-silent, normalized)")
+
+
 def completion_summary():
     from meta import completion as comp_mod
 
@@ -366,4 +390,5 @@ if __name__ == "__main__":
     profile_export_import()
     outbox_visibility()
     completion_summary()
+    card_sfx_generation()
     print("ALL META TESTS PASSED")

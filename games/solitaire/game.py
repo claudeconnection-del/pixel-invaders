@@ -576,15 +576,16 @@ class SolitaireRun(GameRun):
 
     def on_event(self, etype, data, renderer, audio, banner):
         if etype == "sol_draw":
-            audio.play("menu_move")
+            audio.play("card_flip")
         elif etype == "sol_move":
-            audio.play("menu_select")
+            audio.play("card_place")
         elif etype == "sol_home":
-            audio.play("powerup")
+            audio.play("card_place")
+            audio.play("powerup")               # keep the reward layer on top
         elif etype == "sol_undo":
-            audio.play("menu_move")
+            audio.play("card_flip")
         elif etype == "sol_deal":
-            audio.play("menu_select")
+            audio.play("card_shuffle")
         elif etype == "sol_win":
             audio.play("win")
             banner("YOU WIN!", 3.0)

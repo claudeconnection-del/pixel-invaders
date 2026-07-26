@@ -443,10 +443,12 @@ class GinRummyRun(GameRun):
                    center=True)
 
     def on_event(self, etype, data, renderer, audio, banner):
-        if etype in ("rm_draw", "rm_discard"):
-            audio.play("menu_move")
+        if etype == "rm_draw":
+            audio.play("card_flip")
+        elif etype == "rm_discard":
+            audio.play("card_place")
         elif etype == "rm_deal":
-            audio.play("menu_select")
+            audio.play("card_shuffle")
         elif etype == "rm_win":
             audio.play("win")
             banner("HAND WON", 2.0)

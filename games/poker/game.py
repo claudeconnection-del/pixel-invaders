@@ -359,15 +359,18 @@ class VideoPokerRun(GameRun):
                    color=GOOD, center=True)
 
     def on_event(self, etype, data, renderer, audio, banner):
-        if etype in ("vp_deal", "vp_hold"):
-            audio.play("menu_move")
+        if etype == "vp_deal":
+            audio.play("card_shuffle")
+        elif etype == "vp_hold":
+            audio.play("card_flip")
         elif etype == "vp_rebuy":
-            audio.play("menu_select")
+            audio.play("chip_stack")
         elif etype == "vp_win":
+            audio.play("chip_stack")            # credits land on the felt
             audio.play("win" if data["amount"] >= 100 else "powerup")
             banner(f"+{data['amount']}", 1.6)
         elif etype == "vp_lose":
-            audio.play("menu_move")
+            audio.play("card_flip")             # the draw flips, no payout
 
 
 def _in(px, py, x, y, w, h):
