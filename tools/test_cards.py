@@ -293,6 +293,98 @@ def test_solitaire_achievements():
     print(f"solitaire achievements OK ({len(ACHIEVEMENTS)} incl. grind)")
 
 
+def test_tweens():
+    from games.cards.table import Tweens
+
+    tw = Tweens()
+    # no tween registered: pos is just a pass-through
+    assert tw.pos("k", (5, 5), 1.0) == (5, 5)
+
+    # start/mid/end interpolation, out-cubic easing (front-loaded motion)
+    tw.add("a", (0, 0), (100, 200), 0.10, now=1.0)
+    assert tw.pos("a", (999, 999), 1.0) == (0, 0)                  # t=start: from_xy
+    mid_x, mid_y = tw.pos("a", (999, 999), 1.05)                   # t=start+half
+    assert 50 < mid_x < 100 and 100 < mid_y < 200                  # past linear midpoint
+    assert len(tw) == 1
+    # expiry: past the duration, cleans up and falls back to the caller's
+    # current logical position (which may differ from the tween's to_xy)
+    assert tw.pos("a", (101, 201), 1.11) == (101, 201)
+    assert len(tw) == 0
+
+    # a tween added for a future start renders at from_xy until it begins
+    # (deal-cascade stagger: card N's flight starts N*delay after the others)
+    tw.add("b", (10, 10), (10, 90), 0.10, now=2.0, delay=0.05)
+    assert tw.pos("b", (999, 999), 2.02) == (10, 10)               # not started yet
+    assert len(tw) == 1
+    x, y = tw.pos("b", (999, 999), 2.10)                           # mid-flight
+    assert 10 <= x <= 10 and 10 < y < 90
+
+    # dur<=0 (low-motion setting) is a no-op: nothing is ever tracked
+    tw2 = Tweens()
+    tw2.add("c", (0, 0), (50, 50), 0.0, now=0.0)
+    assert len(tw2) == 0
+    assert tw2.pos("c", (7, 8), 0.0) == (7, 8)
+
+    # >MAX_LIVE concurrent flights degrade: newest overflow is dropped, so it
+    # renders instantly at the caller's logical position instead of piling up
+    tw3 = Tweens()
+    for i in range(Tweens.MAX_LIVE):
+        tw3.add(f"card{i}", (0, 0), (10, 10), 0.2, now=0.0)
+    assert len(tw3) == Tweens.MAX_LIVE
+    tw3.add("overflow", (0, 0), (10, 10), 0.2, now=0.0)
+    assert len(tw3) == Tweens.MAX_LIVE                              # unchanged
+    assert tw3.pos("overflow", (3, 4), 0.0) == (3, 4)                # instant
+    # re-adding an already-live key is never blocked by the cap
+    tw3.add("card0", (0, 0), (20, 20), 0.2, now=0.0)
+    assert len(tw3) == Tweens.MAX_LIVE
+    print("tweens OK (easing math, expiry, deferred start, low-motion no-op, "
+          "concurrency degrade)")
+
+
+def test_solitaire_tween_wiring():
+    import games.solitaire.game as solgame
+
+    # a fresh deal queues a staggered cascade for the dealt cards, capped at
+    # MAX_LIVE concurrent flights (28 dealt > 24 cap: the tail lands instantly)
+    run = solgame.create_run("draw1", random.Random(9))
+    run.attach_profile({"achievements": {}, "lifetime": {}, "unlocked_skins": []},
+                       {}, lambda: None)
+    assert len(run.tweens) == solgame.table.Tweens.MAX_LIVE
+
+    # let the cascade finish, then a stock draw queues exactly one flight
+    run.tweens = solgame.table.Tweens()
+    assert run.model.draw()
+    run._queue_draw_tween()
+    assert len(run.tweens) == 1
+
+    # a tableau->tableau run move queues one flight per moved card, and the
+    # landing position matches the destination column's post-move slot
+    run.tweens = solgame.table.Tweens()
+    run.model.tableau = [{"down": [], "up": [Card(6, "H"), Card(5, "S")]},
+                         {"down": [], "up": [Card(7, "S")]}] + \
+                        [{"down": [], "up": []} for _ in range(5)]
+    run.sel = {"kind": "tableau", "col": 0, "count": 2}
+    run._drop(("tableau", 1))
+    assert len(run.tweens) == 2
+    dest_x = run._col_x(1)
+    dest_ys = run._col_ys(1)
+    for i, card in enumerate((Card(6, "H"), Card(5, "S"))):
+        to_xy = run.tweens._live[(card.rank, card.suit)][1]     # [from,to,...]
+        assert to_xy == (dest_x, dest_ys[1 + i]), (card, to_xy, dest_ys)
+
+    # the low-motion setting is a hard no-op: nothing gets queued anywhere
+    run.settings["particles"] = "low"
+    run.tweens = solgame.table.Tweens()
+    run.model.tableau = [{"down": [], "up": [Card(13, "D")]},
+                         {"down": [], "up": []}] + \
+                        [{"down": [], "up": []} for _ in range(5)]
+    run.sel = {"kind": "tableau", "col": 0, "count": 1}
+    run._drop(("tableau", 1))
+    assert len(run.tweens) == 0
+    print("solitaire tween wiring OK (deal cascade, draw, run move, "
+          "low-motion no-op)")
+
+
 def test_autocomplete_and_double_click():
     import games.solitaire.game as solgame
     run = solgame.create_run("draw1", random.Random(1))
@@ -334,6 +426,8 @@ def main():
     test_vegas_rules()
     test_vegas_achievements()
     test_solitaire_achievements()
+    test_tweens()
+    test_solitaire_tween_wiring()
     test_autocomplete_and_double_click()
     print("ALL CARD TESTS PASSED")
 

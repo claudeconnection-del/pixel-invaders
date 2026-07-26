@@ -261,6 +261,24 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   rebuy/win→chip_stack, alongside the existing win/powerup toast layer). Tests: generation
   determinism/audibility/normalization in `tools/test_meta.py`; smoke stays green through the
   event-driven paths.
+- **Card deal/move animations — shared tween layer (CAB-20).** ✅ New `Tweens` helper in
+  `games/cards/table.py`: `add(card_key, from_xy, to_xy, dur, now, delay, flip)` queues a flight,
+  `pos(card_key, default_xy, now)` returns the eased (out-cubic) render position while one is live
+  or `default_xy` otherwise — games keep drawing every card at its logical slot and only the
+  render position is diverted, so rules/model/hit-testing never see anything but the final state.
+  A flight that hasn't reached its (possibly staggered) start renders at `from_xy`; past its
+  duration it expires and is dropped. Caps at `MAX_LIVE=24` concurrent flights (the overflow lands
+  instantly) and is a hard no-op under the `particles: low` setting (today's instant behavior,
+  unchanged). Wired into **Solitaire**: a staggered ~20ms/card deal cascade (from the stock),
+  stock→waste draw slides, tableau/waste/foundation move + auto-home flights (double-click and the
+  60ms-cadence auto-complete both queue tweens — the very case `MAX_LIVE` exists for) — hit-testing
+  and undo stay entirely on the logical model throughout. Wired into **Gin Rummy**: stock/discard
+  draw slides into the regrouped hand fan, a hand→discard-pile slide on discard, and an
+  approximate house-fan-center→discard flight when the AI discards (its hand is face-down, so an
+  exact seat position would be fiction). Tests: `Tweens` easing/expiry/deferred-start/degrade math
+  in `tools/test_cards.py`; per-game integration tests assert real gameplay actions (deal, draw,
+  run-move, low-motion) queue the right flights with correct landing coordinates in
+  `tools/test_cards.py` and `tools/test_rummy.py`; smoke stays green through solitaire + rummy.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

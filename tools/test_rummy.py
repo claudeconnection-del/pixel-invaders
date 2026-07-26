@@ -212,6 +212,44 @@ def test_rummy_wiring():
     print("gin rummy wiring OK (achievements + grind counters + cosmetic sync)")
 
 
+def test_rummy_tween_wiring():
+    import games.rummy.game as rgame
+
+    run = rgame.create_run("gin", random.Random(4))
+    section = {"achievements": {}, "lifetime": {}, "unlocked_skins": []}
+    run.attach_profile(section, {}, lambda: None)
+    assert run.model.turn == "P1" and run.model.phase == "draw"
+
+    # a human stock draw queues exactly one flight, landing in the hand fan
+    sx, sy, sw, sh = run._stock_rect()
+    run._click(sx + sw / 2, sy + sh / 2)
+    assert run.model.phase == "discard"
+    assert len(run.tweens) == 1
+    drawn = run.model.hands["P1"][-1]
+    key = (drawn.rank, drawn.suit)
+    to_xy = run.tweens._live[key][1]
+    landing = next((x for c, x, _ in run._human_layout() if c == drawn), None)
+    assert landing is not None and to_xy == (landing, run._hand_y())
+
+    # discarding that same card queues a flight into the discard pile
+    run.tweens = rgame.table.Tweens()
+    run._hand_layout = run._human_layout()      # normally refreshed by draw_hud
+    card, x, _ = run._hand_layout[0]
+    run._click(x + rgame.CARD_W / 2, run._hand_y() + rgame.CARD_H / 2)
+    assert len(run.tweens) == 1
+    dx, dy = run._discard_rect()[:2]
+    assert run.tweens._live[(card.rank, card.suit)][1] == (dx, dy)
+
+    # low-motion setting is a hard no-op
+    run.settings["particles"] = "low"
+    run.tweens = rgame.table.Tweens()
+    if run.model.turn == "P1" and run.model.phase == "draw":
+        sx, sy, sw, sh = run._stock_rect()
+        run._click(sx + sw / 2, sy + sh / 2)
+        assert len(run.tweens) == 0
+    print("rummy tween wiring OK (draw + discard flights, low-motion no-op)")
+
+
 def test_rummy_stats_rows():
     import games.rummy as rummy
     from arcade.game_api import resolve_stats_rows
@@ -237,6 +275,7 @@ def main():
     test_ai_game()
     test_rummy_achievements()
     test_rummy_wiring()
+    test_rummy_tween_wiring()
     test_rummy_stats_rows()
     print("ALL RUMMY TESTS PASSED")
 

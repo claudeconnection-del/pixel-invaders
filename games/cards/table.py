@@ -16,6 +16,62 @@ from games.cards import skins
 from games.cards.deck import Card
 
 
+class Tweens:
+    """Short flight animations for card moves (CAB-20): games keep drawing
+    every card at its LOGICAL slot but ask this layer for the render
+    position while a flight is live. Rules/model/hit-testing always operate
+    on the logical position — a flight is a visual overlay only, so input
+    during a live 150ms flight simply lands on the already-current state.
+
+    `card_key` identifies one physical card (games use (rank, suit)) so a
+    flight tracks correctly even if the same logical slot is redrawn with a
+    different card next frame.
+    """
+    MAX_LIVE = 24
+
+    def __init__(self):
+        self._live = {}  # card_key -> [from_xy, to_xy, start_t, dur, flip]
+
+    def __len__(self):
+        return len(self._live)
+
+    def add(self, card_key, from_xy, to_xy, dur=0.15, flip=False, now=0.0,
+           delay=0.0):
+        """Queue a flight from `from_xy` to `to_xy` starting at `now + delay`
+        (deal cascades stagger many cards this way). `dur <= 0` (the
+        low-motion settings path) is a no-op — the card then renders at its
+        logical position every frame, exactly like before this feature."""
+        if dur <= 0:
+            return
+        if card_key not in self._live and len(self._live) >= self.MAX_LIVE:
+            return  # too many in flight at once: this one lands instantly
+        self._live[card_key] = [from_xy, to_xy, now + delay, dur, flip]
+
+    def flipping(self, card_key):
+        tw = self._live.get(card_key)
+        return tw is not None and tw[4]
+
+    def pos(self, card_key, default_xy, now):
+        """The render position for `card_key` this frame: `default_xy`
+        (the logical slot) unless a flight is live, in which case an
+        out-cubic eased point along it — front-loaded motion that settles
+        gently, matching the rest of the cabinet's UI easing."""
+        tw = self._live.get(card_key)
+        if tw is None:
+            return default_xy
+        from_xy, to_xy, start_t, dur, _flip = tw
+        if now < start_t:
+            return from_xy
+        frac = (now - start_t) / dur
+        if frac >= 1.0:
+            del self._live[card_key]
+            return default_xy
+        eased = 1 - (1 - frac) ** 3
+        fx, fy = from_xy
+        tx, ty = to_xy
+        return (fx + (tx - fx) * eased, fy + (ty - fy) * eased)
+
+
 def tabletop_store(settings):
     """The shared cosmetics store settings['tabletop'], defaults backfilled."""
     tt = settings.setdefault("tabletop", {}) if settings is not None else {}

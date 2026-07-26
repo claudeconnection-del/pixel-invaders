@@ -105,6 +105,7 @@ class SolitaireRun(GameRun):
         self.felt = skins.felt_by_id("emberlight")
         self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
+        self.tweens = table.Tweens()           # CAB-20: deal/move flight animations
         self.picker = table.SkinPicker(self)   # shared TAB deck/felt picker
         self.rules = table.RulesOverlay(self)  # shared H rules overlay
         self.rules_title = INFO.name
@@ -148,7 +149,107 @@ class SolitaireRun(GameRun):
         if self.vegas:
             self._start_vegas_deal(life)   # buy-in for the opening deal
         self._sync_unlocks()
+        self._queue_deal_cascade()
         self.save_cb()
+
+    # --------------------------------------------------- move animations
+    def _tween_dur(self):
+        """0 (instant, exactly pre-CAB-20 behavior) under the low-motion
+        particles setting; otherwise every flight's default duration."""
+        if self.settings is not None and self.settings.get("particles") == "low":
+            return 0.0
+        return 0.15
+
+    def _waste_top_xy(self):
+        ox = self._ox()
+        show = self.model.waste[-3:] if self.draw_count == 3 else self.model.waste[-1:]
+        return (ox + COL_STRIDE + (len(show) - 1) * 24, TOP_Y)
+
+    def _foundation_xy(self, suit):
+        idx = FOUNDATION_COLS[SUITS.index(suit)]
+        return (self._ox() + idx * COL_STRIDE, TOP_Y)
+
+    def _capture_move_positions(self, sel):
+        """(card, from_xy) pairs for the currently selected run, read BEFORE
+        the model mutates — the source pile's cards and their current slots."""
+        kind = sel["kind"]
+        if kind == "waste":
+            return [(self.model.waste[-1], self._waste_top_xy())]
+        if kind == "tableau":
+            col = sel["col"]
+            p = self.model.tableau[col]
+            start = len(p["up"]) - sel["count"]
+            cards = p["up"][start:]
+            ys = self._col_ys(col)
+            ndown = len(p["down"])
+            cx = self._col_x(col)
+            return [(c, (cx, ys[ndown + start + i])) for i, c in enumerate(cards)]
+        if kind == "foundation":
+            suit = sel["suit"]
+            return [(self.model.foundations[suit][-1], self._foundation_xy(suit))]
+        return []
+
+    def _land_positions(self, cards, t):
+        """Post-move landing (x, y) for `cards`, read AFTER the model has
+        already applied the move."""
+        if t[0] == "tableau":
+            j = t[1]
+            ys = self._col_ys(j)
+            p = self.model.tableau[j]
+            n = len(p["down"]) + len(p["up"])
+            start = n - len(cards)
+            cx = self._col_x(j)
+            return [(cx, ys[start + i]) for i in range(len(cards))]
+        if t[0] == "foundation":
+            xy = self._foundation_xy(t[1])
+            return [xy] * len(cards)
+        return [(0, 0)] * len(cards)
+
+    def _queue_move_tween(self, moving, t):
+        """`moving`: (card, from_xy) pairs captured before the mutation;
+        `t` is the drop target they just landed on."""
+        if not moving:
+            return
+        dur = self._tween_dur()
+        if dur <= 0:
+            return
+        cards = [c for c, _ in moving]
+        to_positions = self._land_positions(cards, t)
+        for (card, from_xy), to_xy in zip(moving, to_positions):
+            self.tweens.add((card.rank, card.suit), from_xy, to_xy, dur,
+                            now=self.time)
+
+    def _queue_simple_tween(self, card, from_xy, t):
+        dur = self._tween_dur()
+        if dur <= 0 or card is None:
+            return
+        to_xy = self._land_positions([card], t)[0]
+        self.tweens.add((card.rank, card.suit), from_xy, to_xy, dur, now=self.time)
+
+    def _queue_draw_tween(self):
+        dur = self._tween_dur()
+        if dur <= 0 or not self.model.waste:
+            return
+        card = self.model.waste[-1]
+        self.tweens.add((card.rank, card.suit), (self._ox(), TOP_Y),
+                        self._waste_top_xy(), dur, now=self.time)
+
+    def _queue_deal_cascade(self):
+        """Every freshly-dealt tableau card flies in from the stock, staggered
+        ~20ms apart so the deal reads as a cascade rather than a pop-in."""
+        dur = self._tween_dur()
+        if dur <= 0:
+            return
+        origin = (self._ox(), TOP_Y)
+        i = 0
+        for col in range(7):
+            p = self.model.tableau[col]
+            ys = self._col_ys(col)
+            cx = self._col_x(col)
+            for k, card in enumerate(p["down"] + p["up"]):
+                self.tweens.add((card.rank, card.suit), origin, (cx, ys[k]),
+                                dur, now=self.time, delay=i * 0.02)
+                i += 1
 
     def _start_vegas_deal(self, life):
         """Take the buy-in for a fresh Vegas deal and reset the bank diff
@@ -240,13 +341,23 @@ class SolitaireRun(GameRun):
     def _auto_step(self):
         """One move toward finishing a solved board: play a top card home, or
         turn the stock to expose more. Returns 'home' | 'draw' | None."""
+        waste_card = self.model.waste[-1] if self.model.waste else None
+        waste_xy = self._waste_top_xy() if waste_card else None
         if self.model.waste_to_foundation():
+            self._queue_simple_tween(waste_card, waste_xy,
+                                     ("foundation", waste_card.suit))
             return "home"
         for i in range(7):
+            p = self.model.tableau[i]
+            card = p["up"][-1] if p["up"] else None
+            ys = self._col_ys(i)
+            from_xy = (self._col_x(i), ys[-1]) if card else None
             if self.model.tableau_to_foundation(i):
+                self._queue_simple_tween(card, from_xy, ("foundation", card.suit))
                 return "home"
         if self.model.stock or self.model.waste:
             if self.model.draw():
+                self._queue_draw_tween()
                 return "draw"
         return None
 
@@ -300,6 +411,7 @@ class SolitaireRun(GameRun):
             if self.vegas:
                 self._start_vegas_deal(self.section["lifetime"])
             self.save_cb()
+        self._queue_deal_cascade()
         self.emit("sol_deal")
 
     def _click(self, px, py):
@@ -314,6 +426,7 @@ class SolitaireRun(GameRun):
         if t[0] == "stock":
             if self.model.draw():
                 self.emit("sol_draw")
+                self._queue_draw_tween()
             self.sel = None
             return
         dbl = (self._last_click and self._last_click[0] == t
@@ -332,16 +445,23 @@ class SolitaireRun(GameRun):
     def _auto_home(self, t):
         """Send the clicked card home if it's a foundation-legal top card."""
         if t[0] == "waste":
+            card = self.model.waste[-1] if self.model.waste else None
+            from_xy = self._waste_top_xy() if card else None
             if self.model.waste_to_foundation():
                 self.emit("sol_home")
+                self._queue_simple_tween(card, from_xy, ("foundation", card.suit))
                 self._check_win()
                 return True
         elif t[0] == "tableau" and t[2] != "empty":
             col, k = t[1], t[2]
             p = self.model.tableau[col]
+            card = p["up"][-1] if p["up"] else None
+            ys = self._col_ys(col)
+            from_xy = (self._col_x(col), ys[-1]) if card else None
             if k == len(p["down"]) + len(p["up"]) - 1 \
                     and self.model.tableau_to_foundation(col):
                 self.emit("sol_home")
+                self._queue_simple_tween(card, from_xy, ("foundation", card.suit))
                 self._check_win()
                 return True
         return False
@@ -365,6 +485,7 @@ class SolitaireRun(GameRun):
 
     def _drop(self, t):
         sel, moved, home = self.sel, False, False
+        moving = self._capture_move_positions(sel)
         if t[0] == "tableau":
             j = t[1]
             if sel["kind"] == "waste":
@@ -381,6 +502,7 @@ class SolitaireRun(GameRun):
         self.sel = None
         if moved:
             self.emit("sol_home" if home else "sol_move")
+            self._queue_move_tween(moving, t)
             self._check_win()
 
     def _check_win(self):
@@ -469,7 +591,9 @@ class SolitaireRun(GameRun):
             show = w[-3:] if self.draw_count == 3 else w[-1:]
             for j, card in enumerate(show):
                 sel = (self.sel and self.sel["kind"] == "waste" and j == len(show) - 1)
-                card_render.draw_card(o, wx + j * 24, TOP_Y, CARD_W, CARD_H,
+                x, y = self.tweens.pos((card.rank, card.suit),
+                                       (wx + j * 24, TOP_Y), self.time)
+                card_render.draw_card(o, x, y, CARD_W, CARD_H,
                                       card, self.deck, selected=bool(sel),
                                       four_color=self.four_color)
 
@@ -480,7 +604,9 @@ class SolitaireRun(GameRun):
             pile = self.model.foundations[suit]
             if pile:
                 sel = self.sel and self.sel.get("suit") == suit
-                card_render.draw_card(o, fx, TOP_Y, CARD_W, CARD_H, pile[-1],
+                card = pile[-1]
+                x, y = self.tweens.pos((card.rank, card.suit), (fx, TOP_Y), self.time)
+                card_render.draw_card(o, x, y, CARD_W, CARD_H, card,
                                       self.deck, selected=bool(sel),
                                       four_color=self.four_color)
             else:
@@ -537,7 +663,8 @@ class SolitaireRun(GameRun):
         cards = [(c, False) for c in p["down"]] + [(c, True) for c in p["up"]]
         for k, (card, up) in enumerate(cards):
             selected = up and sel_from is not None and (k - ndown) >= sel_from
-            card_render.draw_card(o, cx, ys[k], CARD_W, CARD_H, card, self.deck,
+            x, y = self.tweens.pos((card.rank, card.suit), (cx, ys[k]), self.time)
+            card_render.draw_card(o, x, y, CARD_W, CARD_H, card, self.deck,
                                   face_up=up, selected=selected,
                                   four_color=self.four_color)
         # hover highlight on the frontmost card of the column

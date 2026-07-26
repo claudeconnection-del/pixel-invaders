@@ -82,6 +82,7 @@ class GinRummyRun(GameRun):
         self.felt = skins.felt_by_id("emberlight")
         self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
+        self.tweens = table.Tweens()           # CAB-20: draw/discard flight animations
         self.picker = table.SkinPicker(self)
         self.rules = table.RulesOverlay(self)
         self.rules_title = INFO.name
@@ -117,6 +118,28 @@ class GinRummyRun(GameRun):
         life["rm_hands"] += 1           # this freshly-dealt hand counts as played
         self._sync_unlocks()
         self.save_cb()
+
+    # --------------------------------------------------- move animations
+    def _tween_dur(self):
+        """0 (instant, exactly pre-CAB-20 behavior) under the low-motion
+        particles setting; otherwise the default flight duration."""
+        if self.settings is not None and self.settings.get("particles") == "low":
+            return 0.0
+        return 0.15
+
+    def _queue_tween(self, card, from_xy, to_xy):
+        dur = self._tween_dur()
+        if dur <= 0 or card is None:
+            return
+        self.tweens.add((card.rank, card.suit), from_xy, to_xy, dur, now=self.time)
+
+    def _queue_drawn_tween(self, card, from_xy):
+        """A newly-drawn card slides in to its resting slot in the (freshly
+        re-grouped) hand fan."""
+        to_xy = next(((x, self._hand_y()) for c, x, _ in self._human_layout()
+                     if c == card), None)
+        if to_xy is not None:
+            self._queue_tween(card, from_xy, to_xy)
 
     def _sync_unlocks(self):
         """Mirror any earned cosmetic-unlock achievements into the shared
@@ -160,12 +183,15 @@ class GinRummyRun(GameRun):
 
     def _house_turn(self):
         from games.rummy.ai import ai_turn
-        res = ai_turn(self.model)
-        if res.get("washed"):
+        house_xy = (self._ox() - CARD_W / 2, 66)   # house fan center: cards are
+        res = ai_turn(self.model)                  # face-down, so an exact seat
+        if res.get("washed"):                      # position would be a lie
             self.message = "Stock ran out — hand washed. N: deal again."
             self.emit("rm_deal")
             return
         self.emit("rm_discard")
+        if self.model.discard:
+            self._queue_tween(self.model.discard[-1], house_xy, self._discard_rect()[:2])
         if res.get("knock"):
             self._announce()
         else:
@@ -255,12 +281,16 @@ class GinRummyRun(GameRun):
             return
         if m.phase == "draw":
             if _in(px, py, *self._stock_rect()):
-                if m.draw("stock"):
+                drawn = m.draw("stock")
+                if drawn:
                     self.emit("rm_draw")
+                    self._queue_drawn_tween(drawn, self._stock_rect()[:2])
                     self.message = "Discard a card." + self._knock_hint()
             elif m.discard and _in(px, py, *self._discard_rect()):
-                m.draw("discard")
+                from_xy = self._discard_rect()[:2]
+                drawn = m.draw("discard")
                 self.emit("rm_draw")
+                self._queue_drawn_tween(drawn, from_xy)
                 self.message = "Discard a card." + self._knock_hint()
             return
         # discard phase
@@ -269,8 +299,12 @@ class GinRummyRun(GameRun):
             return
         card = self._hand_hit(px, py)
         if card is not None:
+            from_xy = next(((x, self._hand_y()) for c, x, _ in self._hand_layout
+                            if c == card), None)
             if m.discard_card(card, knock=self.knock_mode):
                 self.emit("rm_discard")
+                if from_xy is not None:
+                    self._queue_tween(card, from_xy, self._discard_rect()[:2])
                 self.knock_mode = False
                 if m.hand_over:
                     self._announce()
@@ -367,7 +401,9 @@ class GinRummyRun(GameRun):
         o.text("stock", sx + sw / 2, sy + sh + 4, size=12, color=DIM, center=True)
         dx, dy, dw, dh = self._discard_rect()
         if m.discard:
-            card_render.draw_card(o, dx, dy, dw, dh, m.discard[-1], self.deck,
+            top = m.discard[-1]
+            x, y = self.tweens.pos((top.rank, top.suit), (dx, dy), self.time)
+            card_render.draw_card(o, x, y, dw, dh, top, self.deck,
                                   four_color=self.four_color)
         else:
             card_render.draw_slot(o, dx, dy, dw, dh)
@@ -377,7 +413,8 @@ class GinRummyRun(GameRun):
         self._hand_layout = self._human_layout()
         hy = self._hand_y()
         for card, x, melded in self._hand_layout:
-            card_render.draw_card(o, x, hy, CARD_W, CARD_H, card, self.deck,
+            rx, ry = self.tweens.pos((card.rank, card.suit), (x, hy), self.time)
+            card_render.draw_card(o, rx, ry, CARD_W, CARD_H, card, self.deck,
                                   four_color=self.four_color)
             if melded:
                 o.rect(x + 2, hy + CARD_H - 6, CARD_W - 4, 4, (*GOOD[:3], 220))
