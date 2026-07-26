@@ -186,6 +186,56 @@ FELTS = [
 ]
 
 
+# ------------------------------------------------------------------ boards
+@dataclass
+class BoardSkin:
+    """A Backgammon board + checker palette — a third tabletop cosmetic
+    category alongside decks/felts, since the board isn't cards."""
+    id: str
+    name: str
+    point_light: list
+    point_dark: list
+    frame: list
+    checker_a: list
+    checker_b: list
+    checker_trim: list
+    premium: str = None
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(id=d["id"], name=d["name"],
+                   point_light=list(d["point_light"]), point_dark=list(d["point_dark"]),
+                   frame=list(d["frame"]), checker_a=list(d["checker_a"]),
+                   checker_b=list(d["checker_b"]), checker_trim=list(d["checker_trim"]),
+                   premium=d.get("premium"))
+
+
+BOARDS = [
+    BoardSkin("emberlight_walnut", "Emberlight Walnut", [74, 52, 36], [52, 36, 24],
+             _rgb(theme.COPPER), _rgb(theme.EMBER), _rgb(theme.FROST), [16, 12, 10]),
+    BoardSkin("classic_tan", "Classic Tan", [196, 164, 120], [140, 100, 64],
+             [90, 60, 30], [40, 40, 44], [230, 230, 236], [16, 12, 10]),
+    BoardSkin("midnight", "Midnight", [30, 32, 44], [18, 18, 26],
+             _rgb(theme.COBALT), _rgb(theme.FROST), _rgb(theme.GARNET), [8, 8, 12]),
+    BoardSkin("contrast", "High Key", [232, 228, 220], [180, 176, 168],
+             [20, 20, 20], [20, 20, 24], [200, 30, 40], [10, 10, 10]),
+    BoardSkin("frost", "Frost", [210, 222, 232], [170, 188, 204],
+             _rgb(theme.COBALT), _rgb(theme.COBALT), _rgb(theme.EMBER), [30, 30, 40]),
+    BoardSkin("garden", "Garden", [200, 220, 190], [150, 180, 140],
+             _rgb(theme.FERN), _rgb(theme.RUST), _rgb(theme.SAGE), [20, 30, 20]),
+    # premium (unlocked by backgammon achievements)
+    BoardSkin("noir_lacquer", "Noir Lacquer", [22, 20, 24], [12, 10, 14],
+             _rgb(theme.GOLD), _rgb(theme.GOLD), _rgb(theme.FROST), [8, 8, 10],
+             premium="gammon"),
+    BoardSkin("royal_marble", "Royal Marble", [230, 224, 236], [200, 190, 214],
+             _rgb(theme.IRIS), _rgb(theme.IRIS), _rgb(theme.GOLD), [30, 20, 10],
+             premium="bg_wins_50"),
+]
+
+
 # ---------------------------------------------------------------- registry
 def _avail(items, unlocked):
     unlocked = unlocked or set()
@@ -200,6 +250,10 @@ def available_felts(unlocked):
     return _avail(FELTS, unlocked)
 
 
+def available_boards(unlocked):
+    return _avail(BOARDS, unlocked)
+
+
 def deck_by_id(deck_id):
     for d in DECKS:
         if d.id == deck_id:
@@ -212,3 +266,10 @@ def felt_by_id(felt_id):
         if f.id == felt_id:
             return f
     return FELTS[0]
+
+
+def board_by_id(board_id):
+    for b in BOARDS:
+        if b.id == board_id:
+            return b
+    return BOARDS[0]

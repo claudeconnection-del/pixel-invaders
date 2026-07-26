@@ -47,6 +47,20 @@ def test_skins():
           f"{len(prem)} premium decks)")
 
 
+def test_board_skins():
+    free = skins.available_boards(set())
+    assert all(s.premium is None for s in free)
+    assert len(free) >= 6
+    prem = [s for s in skins.BOARDS if s.premium]
+    assert len(prem) >= 2
+    p = prem[0]
+    assert p.id not in {s.id for s in free}
+    assert p.id in {s.id for s in skins.available_boards({p.premium})}
+    assert skins.board_by_id("emberlight_walnut").id == "emberlight_walnut"
+    assert skins.BoardSkin.from_dict(skins.BOARDS[0].to_dict()) == skins.BOARDS[0]
+    print(f"board skins OK ({len(skins.BOARDS)} boards, {len(prem)} premium)")
+
+
 def test_deal():
     m = Solitaire().deal(random.Random(7))
     total = sum(len(p["down"]) + len(p["up"]) for p in m.tableau)
@@ -173,6 +187,7 @@ def test_autocomplete_and_double_click():
 def main():
     test_deck()
     test_skins()
+    test_board_skins()
     test_deal()
     test_stock_draw_recycle()
     test_move_rules_and_undo()

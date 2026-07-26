@@ -206,6 +206,55 @@ def test_ai_beats_random_baseline():
     print(f"AI vs random baseline OK ({wins}/{n} = {rate:.0%} win rate)")
 
 
+def test_backgammon_achievements():
+    from games.backgammon.achievements import ACHIEVEMENTS
+    by = {a.id: a for a in ACHIEVEMENTS}
+    assert by["bg_first_win"].check("bg_win", {}, {}, {})
+    assert not by["bg_first_win"].check("bg_lose", {}, {}, {})
+    assert by["gammon"].check("bg_win", {"grade": "gammon"}, {}, {})
+    assert not by["gammon"].check("bg_win", {"grade": "single"}, {}, {})
+    assert by["backgammon_win"].check("bg_win", {"grade": "backgammon"}, {}, {})
+    assert by["pip_race"].check("bg_win", {}, {}, {"max_pip_deficit": 30})
+    assert not by["pip_race"].check("bg_win", {}, {}, {"max_pip_deficit": 29})
+    assert by["bg_games_100"].check(None, None, {"bg_games": 100}, {})
+    assert by["bg_wins_50"].check(None, None, {"bg_wins": 50}, {})
+    assert by["bg_games_100"].progress({"bg_games": 40}, {}) == (40, 100)
+    # ids must not collide with the other tabletop games' skin-gate ids
+    from games.solitaire.achievements import ACHIEVEMENTS as SOL
+    from games.rummy.achievements import ACHIEVEMENTS as RUM
+    from games.poker.achievements import ACHIEVEMENTS as POK
+    other_ids = {a.id for a in SOL} | {a.id for a in RUM} | {a.id for a in POK}
+    assert not (set(by) & other_ids)
+    print(f"backgammon achievements OK ({len(ACHIEVEMENTS)} incl. grind, no id collision)")
+
+
+def test_backgammon_wiring():
+    import games.backgammon.game as bggame
+    from meta.achievements import AchievementEngine
+
+    run = bggame.create_run("standard", random.Random(11))
+    section = {"achievements": {}, "lifetime": {}, "unlocked_skins": []}
+    settings = {}
+    run.attach_profile(section, settings, lambda: None)
+    assert section["lifetime"]["bg_games"] == 1
+
+    run._max_pip_deficit = 40
+    run.model.winner = "A"
+    run.model.result = {"winner": "A", "loser": "B", "grade": "gammon"}
+    run._announce_result()
+
+    assert section["lifetime"]["bg_wins"] == 1
+    assert section["lifetime"]["bg_gammons"] == 1
+
+    engine = AchievementEngine(section, bggame.ACHIEVEMENTS)
+    unlocked = {a.id for a in engine.on_frame(run.drain_events(), run.run_stats())}
+    assert {"bg_first_win", "gammon", "pip_race"} <= unlocked
+
+    run.update(0.016, None)
+    assert "noir_lacquer" in settings["tabletop"]["unlocked_boards"]
+    print("backgammon wiring OK (achievements + grind counters + board unlock sync)")
+
+
 def main():
     test_start_position()
     test_bar_entry_and_blocking()
@@ -216,6 +265,8 @@ def main():
     test_gammon_and_backgammon_grading()
     test_ai_vs_ai_deterministic()
     test_ai_beats_random_baseline()
+    test_backgammon_achievements()
+    test_backgammon_wiring()
     print("ALL BACKGAMMON TESTS PASSED")
 
 

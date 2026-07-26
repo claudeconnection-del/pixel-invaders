@@ -21,8 +21,10 @@ def tabletop_store(settings):
     tt = settings.setdefault("tabletop", {}) if settings is not None else {}
     tt.setdefault("deck", "classic")
     tt.setdefault("felt", "emberlight")
+    tt.setdefault("board", "emberlight_walnut")
     tt.setdefault("unlocked_decks", [])
     tt.setdefault("unlocked_felts", [])
+    tt.setdefault("unlocked_boards", [])
     return tt
 
 
@@ -39,12 +41,16 @@ def available_felts(store):
     return skins.available_felts(set(store.get("unlocked_felts", [])))
 
 
+def available_boards(store):
+    return skins.available_boards(set(store.get("unlocked_boards", [])))
+
+
 def sync_unlocks(section, settings, save_cb):
     """Mirror any earned cosmetic-unlock achievements (a game's
     section["achievements"]) into the shared tabletop store so the tied
-    premium deck/felt becomes selectable. Shared by every tabletop game so
-    unlocks earned in one game (e.g. Rummy's `first_gin`) show up as soon as
-    any tabletop game's `settings["tabletop"]` is consulted."""
+    premium deck/felt/board becomes selectable. Shared by every tabletop game
+    so unlocks earned in one game (e.g. Rummy's `first_gin`) show up as soon
+    as any tabletop game's `settings["tabletop"]` is consulted."""
     if section is None or settings is None:
         return
     tt = tabletop_store(settings)
@@ -57,6 +63,10 @@ def sync_unlocks(section, settings, save_cb):
     for f in skins.FELTS:
         if f.premium in got and f.id not in tt["unlocked_felts"]:
             tt["unlocked_felts"].append(f.id)
+            changed = True
+    for b in skins.BOARDS:
+        if b.premium in got and b.id not in tt["unlocked_boards"]:
+            tt["unlocked_boards"].append(b.id)
             changed = True
     if changed:
         save_cb()
@@ -131,24 +141,46 @@ def _draw_pattern(o, W, H, cols, pat):
 
 
 # ------------------------------------------------------------- skin picker
+# kind -> (attribute name on the host == kind, available_*(store) lookup,
+# whether setting it needs the host's special setter instead of plain assign)
+_KIND_LOOKUP = {
+    "deck": available_decks,
+    "felt": available_felts,
+    "board": available_boards,
+}
+_DEFAULT_ROWS = (("Deck", "deck"), ("Felt", "felt"))
+
+
 class SkinPicker:
-    """The TAB deck/felt picker, shared across tabletop games. Operates on a
-    `host` run (deck / felt / settings / save_cb / _set_felt)."""
+    """The TAB cosmetics picker, shared across tabletop games. Operates on a
+    `host` run exposing `settings`, `save_cb`, one attribute per row kind
+    (`deck`/`felt`/`board`), and `_set_felt(felt)` for the felt kind (a plain
+    attribute for the others). Hosts customize which rows they offer via an
+    optional `picker_rows() -> [(label, kind), ...]` (default Deck/Felt) —
+    e.g. Backgammon drops Deck and adds Board — so this stays generic across
+    cosmetic *kinds* with no per-game branching."""
 
     def __init__(self, host):
         self.host = host
         self.open = False
-        self.row = 0            # 0 = Deck, 1 = Felt
+        self.row = 0
+
+    def rows(self):
+        get_rows = getattr(self.host, "picker_rows", None)
+        return get_rows() if get_rows is not None else _DEFAULT_ROWS
 
     def toggle(self):
         self.open = not self.open
         self.row = 0
 
     def handle_key(self, key):
+        n = len(self.rows())
         if key == pygame.K_TAB:            # Esc is the cabinet's pause key
             self.open = False
-        elif key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s):
-            self.row = 1 - self.row
+        elif key in (pygame.K_UP, pygame.K_w):
+            self.row = (self.row - 1) % n
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.row = (self.row + 1) % n
         elif key in (pygame.K_LEFT, pygame.K_a):
             self._cycle(-1)
         elif key in (pygame.K_RIGHT, pygame.K_d):
@@ -157,33 +189,38 @@ class SkinPicker:
     def _cycle(self, direction):
         h = self.host
         store = tabletop_store(h.settings)
-        if self.row == 0:
-            opts = available_decks(store)
-            i = next((k for k, d in enumerate(opts) if d.id == h.deck.id), 0)
-            h.deck = opts[(i + direction) % len(opts)]
-            store["deck"] = h.deck.id
+        _, kind = self.rows()[self.row]
+        opts = _KIND_LOOKUP[kind](store)
+        cur = getattr(h, kind)
+        i = next((k for k, opt in enumerate(opts) if opt.id == cur.id), 0)
+        new = opts[(i + direction) % len(opts)]
+        if kind == "felt":
+            h._set_felt(new)
         else:
-            opts = available_felts(store)
-            i = next((k for k, f in enumerate(opts) if f.id == h.felt.id), 0)
-            h._set_felt(opts[(i + direction) % len(opts)])
-            store["felt"] = h.felt.id
+            setattr(h, kind, new)
+        store[kind] = new.id
         h.save_cb()
 
     def draw(self, o):
         h = self.host
+        rows = self.rows()
         x, y0 = 90, 220
-        pw, ph = 480, 232
-        o.rect(x - 26, y0 - 44, pw, ph, PANEL)
+        ph = 44 + len(rows) * 42 + 84
+        o.rect(x - 26, y0 - 44, 480, ph, PANEL)
         o.rect(x - 26, y0 - 44, 4, ph, GOLD)
         o.text("TABLE SKINS", x, y0 - 26, size=20, color=EMBER)
-        for i, (label, val) in enumerate((("Deck", h.deck.name), ("Felt", h.felt.name))):
+        for i, (label, kind) in enumerate(rows):
             yy = y0 + 18 + i * 42
             sel = i == self.row
+            val = getattr(h, kind).name
             o.text(("> " if sel else "  ") + label, x, yy, size=18,
                    color=TEXT if sel else DIM)
             o.text(f"< {val} >" if sel else val, x + 150, yy, size=18,
                    color=GOLD if sel else DIM)
-        card_render.draw_card(o, x + 300, y0 + 6, 66, 92, Card(1, "S"), h.deck)
-        card_render.draw_card(o, x + 372, y0 + 6, 66, 92, None, h.deck, face_up=False)
+        preview_y = y0 + 18 + len(rows) * 42
+        if any(kind == "deck" for _, kind in rows):
+            card_render.draw_card(o, x + 300, preview_y, 66, 92, Card(1, "S"), h.deck)
+            card_render.draw_card(o, x + 372, preview_y, 66, 92, None, h.deck,
+                                  face_up=False)
         o.text("Up/Down: pick   Left/Right: change   Tab: close",
-               x, y0 + 128, size=13, color=DIM)
+               x, preview_y + 84, size=13, color=DIM)

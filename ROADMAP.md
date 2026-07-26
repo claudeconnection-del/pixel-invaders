@@ -113,11 +113,25 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
    view assembles the human's picks against `model.legal_moves()`'s enumerated sequences and
    only calls `model.apply()` once a full sequence is chosen, so it works with the model's
    whole-sequence API without needing its own undo/rollback; U undoes the in-progress turn back
-   to the roll. House plays with the same ~0.8s AI beat as Rummy. No board/checker skins yet —
-   reuses a `classic` deck placeholder purely so the shared `SkinPicker` works; real skins are
-   CAB-12. Tests: `tools/test_backgammon.py` (rules, green already), `tools/smoke_test.py`
-   backgammon block (click-driven human turns + AI turns, checker-conservation assert).
-   **NEXT: board/checker skins + achievements** (CAB-12).
+   to the roll. House plays with the same ~0.8s AI beat as Rummy. Tests: `tools/test_backgammon.py`
+   (rules, green already), `tools/smoke_test.py` backgammon block (click-driven human turns + AI
+   turns, checker-conservation assert). **Board/checker skins + achievements done (CAB-12)**:
+   new `BoardSkin` cosmetic category (`games/cards/skins.py`) — 8 boards (6 free incl. Emberlight
+   Walnut/Classic Tan/Midnight/High Key/Frost/Garden + 2 premium: Noir Lacquer on `gammon`, Royal
+   Marble on `bg_wins_50`), point/checker colors read from `settings["tabletop"]["board"]` /
+   `unlocked_boards` (`tabletop_store` + `sync_unlocks` extended). The shared `SkinPicker` is now
+   **host-driven**: any run can expose `picker_rows()` to swap in its own cosmetic categories (a
+   dict of `kind -> available_*(store)` inside `table.py`, no per-game branching) — Backgammon
+   drops the meaningless Deck row and offers Board+Felt instead; card games are unchanged
+   (default Deck+Felt). `games/backgammon/achievements.py`: 6 achievements (`bg_first_win/gammon/
+   backgammon_win/pip_race/bg_games_100/bg_wins_50`) — `pip_race` (win after trailing 30+ pips)
+   reads a live per-run stat (`run_stats()["max_pip_deficit"]`, tracked every frame) rather than
+   a lifetime counter; lifetime counters `bg_games/bg_wins/bg_gammons/bg_backgammons` wired at
+   game-start/result. **Backgammon — and the whole card/tabletop suite — is now feature-complete.**
+
+**🎉 Card/tabletop suite COMPLETE**: Solitaire, Rummy, Video Poker, and Backgammon are all
+playable, achievement-rich, and share one cosmetics system (decks/felts/boards) with a generic,
+extensible skin picker. Monopoly remains spec-only per the original design (stretch, deferred).
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

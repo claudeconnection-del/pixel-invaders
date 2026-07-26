@@ -1,9 +1,8 @@
 """Backgammon — the cabinet-side game module (TABLETOP category). You (A)
 play the house (B) — standard direction/home-board rules in
 games/backgammon/model.py; this is the table view, reusing the shared felt +
-skin plumbing (games/cards/table) like the card games. Board/checker skins
-land in a later increment (CAB-12) — for now the felt is themed, the board
-colors are fixed.
+skin plumbing (games/cards/table) like the card games, plus its own BoardSkin
+cosmetic (board/checker colors — a board isn't cards, so it isn't a deck).
 
 Turn: R (or click ROLL) rolls the dice. Click a highlighted source point (or
 the bar, if you have a checker on it), then a highlighted destination (or the
@@ -17,7 +16,8 @@ import random
 import pygame
 
 from arcade.game_api import GameInfo, GameRun
-from game.theme import TEXT, DIM, EMBER, GOLD, GOOD, DANGER, PANEL, FROST
+from game.theme import TEXT, DIM, EMBER, GOLD, GOOD, DANGER, PANEL
+from games.backgammon.achievements import ACHIEVEMENTS as _BG_ACHIEVEMENTS
 from games.backgammon.ai import ai_move
 from games.backgammon.model import Backgammon, simulate
 from games.cards import skins
@@ -30,7 +30,8 @@ INFO = GameInfo(
     modes=[("standard", "BACKGAMMON")],
     has_scores=False, attract=False, game_music=True, music_pool="menu",
 )
-ACHIEVEMENTS = []          # wired in a later increment (CAB-12)
+ACHIEVEMENTS = _BG_ACHIEVEMENTS
+_GRIND_KEYS = ("bg_games", "bg_wins", "bg_gammons", "bg_backgammons")
 
 HUMAN, HOUSE = "A", "B"
 
@@ -49,11 +50,6 @@ for _slot, _idx in enumerate(_BOTTOM_ORDER):
 for _slot, _idx in enumerate(_TOP_ORDER):
     _POINT_ROW_SLOT[_idx] = ("top", _slot)
 
-_POINT_LIGHT = (74, 52, 36, 255)
-_POINT_DARK = (52, 36, 24, 255)
-_CHECKER_A = (*EMBER[:3], 255)
-_CHECKER_B = (*FROST[:3], 255)
-_CHECKER_EDGE = (16, 12, 10, 220)
 _SEL = (255, 210, 90, 230)
 
 
@@ -68,9 +64,7 @@ class BackgammonRun(GameRun):
         self.settings = None
         self.save_cb = lambda: None
 
-        # no board/checker skins yet (CAB-12); kept so the shared SkinPicker
-        # (which cycles a deck + a felt) works out of the box.
-        self.deck = skins.deck_by_id("classic")
+        self.board = skins.board_by_id("emberlight_walnut")
         self.felt = skins.felt_by_id("emberlight")
         self._felt_preset = table.make_felt_preset(self.felt)
         self.picker = table.SkinPicker(self)
@@ -81,7 +75,12 @@ class BackgammonRun(GameRun):
         self.message = "Your turn — R to roll."
         self._ai_timer = 0.0
         self._prev_mb = False
+        self._max_pip_deficit = 0   # for the "pip_race" comeback achievement
         self._W, self._H = 1280, 860
+
+    def picker_rows(self):
+        """No deck here (a board isn't cards) — Board + Felt instead."""
+        return (("Board", "board"), ("Felt", "felt"))
 
     # ------------------------------------------------------ cabinet contract
     @property
@@ -97,8 +96,12 @@ class BackgammonRun(GameRun):
         self.settings = settings
         self.save_cb = save_cb
         tt = table.tabletop_store(settings)
-        self.deck = skins.deck_by_id(tt.get("deck", "classic"))
+        self.board = skins.board_by_id(tt.get("board", "emberlight_walnut"))
         self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
+        life = section["lifetime"]
+        for k in _GRIND_KEYS:
+            life.setdefault(k, 0)
+        life["bg_games"] += 1        # this freshly-started game counts as played
         self._sync_unlocks()
         self.save_cb()
 
@@ -117,7 +120,7 @@ class BackgammonRun(GameRun):
         return out
 
     def run_stats(self):
-        return {}
+        return {"max_pip_deficit": self._max_pip_deficit}
 
     def run_summary(self):
         return {"win": False}
@@ -126,6 +129,9 @@ class BackgammonRun(GameRun):
     def update(self, dt, inp):
         self.time += dt
         self._sync_unlocks()
+        if self.model.winner is None:
+            deficit = self.model.pip_count(HUMAN) - self.model.pip_count(HOUSE)
+            self._max_pip_deficit = max(self._max_pip_deficit, deficit)
         if self.model.turn == HOUSE and self.model.winner is None:
             self._ai_timer += dt
             if self._ai_timer >= 0.8:
@@ -159,6 +165,14 @@ class BackgammonRun(GameRun):
         tag = {"single": "", "gammon": "GAMMON! ", "backgammon": "BACKGAMMON! "}[grade]
         who = "You win" if won else "The house wins"
         self.message = f"{tag}{who} ({grade}). N: rematch."
+        if won and self.section is not None:
+            life = self.section["lifetime"]
+            life["bg_wins"] = life.get("bg_wins", 0) + 1
+            if grade == "gammon":
+                life["bg_gammons"] = life.get("bg_gammons", 0) + 1
+            elif grade == "backgammon":
+                life["bg_backgammons"] = life.get("bg_backgammons", 0) + 1
+            self.save_cb()
         self.emit("bg_win" if won else "bg_lose", grade=grade)
 
     # ---------------------------------------------------------------- input
@@ -204,7 +218,11 @@ class BackgammonRun(GameRun):
         self.legal_seqs = []
         self.chosen = []
         self.sel_from = None
+        self._max_pip_deficit = 0
         self.message = "Your turn — R to roll."
+        if self.section is not None:
+            self.section["lifetime"]["bg_games"] += 1
+            self.save_cb()
 
     def _legal_next_moves(self):
         """Move-dicts legal as the *next* atomic move given self.chosen."""
@@ -350,7 +368,8 @@ class BackgammonRun(GameRun):
             self.picker.draw(o)
 
     def _draw_point(self, o, i, x, y, w, h, top_row):
-        color = _POINT_LIGHT if i % 2 == 0 else _POINT_DARK
+        color = (*self.board.point_light, 255) if i % 2 == 0 \
+            else (*self.board.point_dark, 255)
         segs = 5
         for s in range(segs):
             seg_w = w * (1 - (s + 0.5) / segs)
@@ -364,14 +383,16 @@ class BackgammonRun(GameRun):
             return
         player = HUMAN if n > 0 else HOUSE
         count = abs(n)
-        color = _CHECKER_A if player == HUMAN else _CHECKER_B
+        color = (*self.board.checker_a, 255) if player == HUMAN \
+            else (*self.board.checker_b, 255)
+        edge = (*self.board.checker_trim, 255)
         size = CHECKER
         cx = x + w / 2
         shown = min(count, 5)
         for k in range(shown):
             cy = (y + 6 + k * (size + 4)) if top_row else (y + h - 6 - (k + 1) * (size + 4))
             o.rect(cx - size / 2, cy, size, size, color)
-            o.rect(cx - size / 2, cy, size, 3, _CHECKER_EDGE)
+            o.rect(cx - size / 2, cy, size, 3, edge)
         if count > 5:
             label_y = (y + 10 + shown * (size + 4)) if top_row \
                 else (y + h - 10 - (shown + 1) * (size + 4))
@@ -384,11 +405,12 @@ class BackgammonRun(GameRun):
         if sel:
             o.rect(x + 2, y + h / 2 - 2, w - 4, 4, _SEL)
         if bar[HOUSE]:
-            o.rect(x + 6, y + 8, w - 12, CHECKER, _CHECKER_B)
+            o.rect(x + 6, y + 8, w - 12, CHECKER, (*self.board.checker_b, 255))
             o.text(str(bar[HOUSE]), x + w / 2, y + 8 + CHECKER / 2 - 8, size=14,
                    color=TEXT, center=True)
         if bar[HUMAN]:
-            o.rect(x + 6, y + h - 8 - CHECKER, w - 12, CHECKER, _CHECKER_A)
+            o.rect(x + 6, y + h - 8 - CHECKER, w - 12, CHECKER,
+                   (*self.board.checker_a, 255))
             o.text(str(bar[HUMAN]), x + w / 2, y + h - 8 - CHECKER / 2 - 8, size=14,
                    color=TEXT, center=True)
 
