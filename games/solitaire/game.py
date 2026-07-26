@@ -60,6 +60,7 @@ class SolitaireRun(GameRun):
 
         self.deck = skins.deck_by_id("classic")
         self.felt = skins.felt_by_id("emberlight")
+        self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
         self.picker = table.SkinPicker(self)   # shared TAB deck/felt picker
 
@@ -92,6 +93,7 @@ class SolitaireRun(GameRun):
         tt = table.tabletop_store(settings)
         self.deck = skins.deck_by_id(tt.get("deck", "classic"))
         self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
+        self.four_color = tt.get("four_color", False)
         life = section["lifetime"]
         for k in _GRIND_KEYS:
             life.setdefault(k, 0)
@@ -379,7 +381,8 @@ class SolitaireRun(GameRun):
             for j, card in enumerate(show):
                 sel = (self.sel and self.sel["kind"] == "waste" and j == len(show) - 1)
                 card_render.draw_card(o, wx + j * 24, TOP_Y, CARD_W, CARD_H,
-                                      card, self.deck, selected=bool(sel))
+                                      card, self.deck, selected=bool(sel),
+                                      four_color=self.four_color)
 
         # foundations
         for idx, col in enumerate(FOUNDATION_COLS):
@@ -389,7 +392,8 @@ class SolitaireRun(GameRun):
             if pile:
                 sel = self.sel and self.sel.get("suit") == suit
                 card_render.draw_card(o, fx, TOP_Y, CARD_W, CARD_H, pile[-1],
-                                      self.deck, selected=bool(sel))
+                                      self.deck, selected=bool(sel),
+                                      four_color=self.four_color)
             else:
                 card_render.draw_slot(o, fx, TOP_Y, CARD_W, CARD_H, suit)
             self._hover_mark(o, ("foundation", suit), fx, TOP_Y, CARD_W, CARD_H)
@@ -443,7 +447,8 @@ class SolitaireRun(GameRun):
         for k, (card, up) in enumerate(cards):
             selected = up and sel_from is not None and (k - ndown) >= sel_from
             card_render.draw_card(o, cx, ys[k], CARD_W, CARD_H, card, self.deck,
-                                  face_up=up, selected=selected)
+                                  face_up=up, selected=selected,
+                                  four_color=self.four_color)
         # hover highlight on the frontmost card of the column
         if self._hover and self._hover[0] == "tableau" and self._hover[1] == i:
             k = self._hover[2]

@@ -415,6 +415,12 @@ def main():
     assert sr.deck.id != deck0 and sr.felt.id != felt0
     tt = app.profile["settings"]["tabletop"]
     assert tt["deck"] == sr.deck.id and tt["felt"] == sr.felt.id
+    # four-color accessibility toggle (third picker row)
+    sr.handle_key(pygame.K_DOWN)            # to the Four-color row
+    assert not sr.four_color
+    sr.handle_key(pygame.K_RIGHT)           # toggle on
+    render_frame()                          # preview redraws with 4-color ink
+    assert sr.four_color and tt["four_color"] is True
     sr.handle_key(pygame.K_TAB)
     assert not sr.picker.open
 

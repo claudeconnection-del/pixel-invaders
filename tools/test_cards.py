@@ -47,6 +47,42 @@ def test_skins():
           f"{len(prem)} premium decks)")
 
 
+def test_four_color_suit_ink():
+    from games.cards import render as card_render
+    from games.cards import table as card_table
+    light = skins.deck_by_id("classic")          # light face
+    dark = skins.deck_by_id("midnight")           # dark face (sum < 360)
+
+    # off: every suit matches the deck's own black/red inks exactly
+    for deck in (light, dark):
+        assert card_render.suit_ink(deck, "S", False) == list(deck.ink_black)
+        assert card_render.suit_ink(deck, "C", False) == list(deck.ink_black)
+        assert card_render.suit_ink(deck, "H", False) == list(deck.ink_red)
+        assert card_render.suit_ink(deck, "D", False) == list(deck.ink_red)
+
+    # on: spades/hearts unchanged; diamonds -> blue, clubs -> green, and both
+    # differ from the deck's own inks
+    for deck in (light, dark):
+        assert card_render.suit_ink(deck, "S", True) == list(deck.ink_black)
+        assert card_render.suit_ink(deck, "H", True) == list(deck.ink_red)
+        d_ink = card_render.suit_ink(deck, "D", True)
+        c_ink = card_render.suit_ink(deck, "C", True)
+        assert d_ink != list(deck.ink_black) and d_ink != list(deck.ink_red)
+        assert c_ink != list(deck.ink_black) and c_ink != list(deck.ink_red)
+        assert d_ink[2] > d_ink[0]        # diamond ink is blue-dominant
+        assert c_ink[1] > c_ink[0]        # club ink is green-dominant
+
+    # dark-faced decks get the lighter variants (brighter than the light-face ones)
+    assert sum(card_render.suit_ink(dark, "D", True)) > \
+        sum(card_render.suit_ink(light, "D", True))
+
+    # store backfills the toggle (default off)
+    store = card_table.tabletop_store({})
+    assert store["four_color"] is False
+    print("four-color suit_ink OK (off matches deck inks, on recolors D/C, "
+          "dark decks get light variants, store backfills)")
+
+
 def test_board_skins():
     free = skins.available_boards(set())
     assert all(s.premium is None for s in free)
@@ -187,6 +223,7 @@ def test_autocomplete_and_double_click():
 def main():
     test_deck()
     test_skins()
+    test_four_color_suit_ink()
     test_board_skins()
     test_deal()
     test_stock_draw_recycle()

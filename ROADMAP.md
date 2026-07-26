@@ -184,6 +184,17 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
 playable, achievement-rich, and share one cosmetics system (decks/felts/boards) with a generic,
 extensible skin picker. Monopoly remains spec-only per the original design (stretch, deferred).
 
+### 🎨 Tabletop polish (Epic D)
+- **Four-color deck accessibility (CAB-18).** ✅ `games/cards/render.py:suit_ink(deck, suit,
+  four_color)` — off keeps the deck's own black/red inks; on, ♦→blue and ♣→green (light variants
+  auto-picked for dark-faced decks via a `sum(face) < 360` heuristic), ♠/♥ unchanged. `draw_card`
+  routes all face ink (rank, corner, pip glyph) through it. Toggle in
+  `settings["tabletop"]["four_color"]` (default off, backfilled by `tabletop_store`); the shared
+  `SkinPicker` gained a generic boolean "Four-color: On/Off" row (all card games; the preview card
+  shows a ♦ so the change is visible). Threaded through solitaire/rummy/poker draw calls. Tests:
+  `suit_ink` truth-table (off matches deck inks; on recolors D/C and differs from both; dark decks
+  get lighter variants; store backfills) in `tools/test_cards.py`; smoke toggles it live via the picker.
+
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
 

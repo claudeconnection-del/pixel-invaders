@@ -49,6 +49,7 @@ class GinRummyRun(GameRun):
 
         self.deck = skins.deck_by_id("classic")
         self.felt = skins.felt_by_id("emberlight")
+        self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
         self.picker = table.SkinPicker(self)
 
@@ -76,6 +77,7 @@ class GinRummyRun(GameRun):
         tt = table.tabletop_store(settings)
         self.deck = skins.deck_by_id(tt.get("deck", "classic"))
         self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
+        self.four_color = tt.get("four_color", False)
         life = section["lifetime"]
         for k in _GRIND_KEYS:
             life.setdefault(k, 0)
@@ -322,7 +324,8 @@ class GinRummyRun(GameRun):
         o.text("stock", sx + sw / 2, sy + sh + 4, size=12, color=DIM, center=True)
         dx, dy, dw, dh = self._discard_rect()
         if m.discard:
-            card_render.draw_card(o, dx, dy, dw, dh, m.discard[-1], self.deck)
+            card_render.draw_card(o, dx, dy, dw, dh, m.discard[-1], self.deck,
+                                  four_color=self.four_color)
         else:
             card_render.draw_slot(o, dx, dy, dw, dh)
         o.text("discard", dx + dw / 2, dy + dh + 4, size=12, color=DIM, center=True)
@@ -331,7 +334,8 @@ class GinRummyRun(GameRun):
         self._hand_layout = self._human_layout()
         hy = self._hand_y()
         for card, x, melded in self._hand_layout:
-            card_render.draw_card(o, x, hy, CARD_W, CARD_H, card, self.deck)
+            card_render.draw_card(o, x, hy, CARD_W, CARD_H, card, self.deck,
+                                  four_color=self.four_color)
             if melded:
                 o.rect(x + 2, hy + CARD_H - 6, CARD_W - 4, 4, (*GOOD[:3], 220))
         dead = deadwood(m.hands[HUMAN])

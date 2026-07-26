@@ -47,6 +47,7 @@ class VideoPokerRun(GameRun):
 
         self.deck = skins.deck_by_id("classic")
         self.felt = skins.felt_by_id("emberlight")
+        self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
         self.picker = table.SkinPicker(self)
 
@@ -71,6 +72,7 @@ class VideoPokerRun(GameRun):
         tt = table.tabletop_store(settings)
         self.deck = skins.deck_by_id(tt.get("deck", "classic"))
         self._set_felt(skins.felt_by_id(tt.get("felt", "emberlight")))
+        self.four_color = tt.get("four_color", False)
         life = section["lifetime"]
         life.setdefault("vp_credits", REBUY_AMOUNT)
         for k in _GRIND_KEYS:
@@ -294,7 +296,8 @@ class VideoPokerRun(GameRun):
             card = m.hand[i] if m.hand else None
             held = m.phase == "hold" and m.held[i]
             card_render.draw_card(o, x, y, CARD_W, CARD_H, card, self.deck,
-                                  face_up=bool(m.hand), selected=held)
+                                  face_up=bool(m.hand), selected=held,
+                                  four_color=self.four_color)
             if held:
                 o.text("HELD", x + CARD_W / 2, y - 20, size=13, color=GOLD,
                        center=True)

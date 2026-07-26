@@ -22,6 +22,7 @@ def tabletop_store(settings):
     tt.setdefault("deck", "classic")
     tt.setdefault("felt", "emberlight")
     tt.setdefault("board", "emberlight_walnut")
+    tt.setdefault("four_color", False)     # accessibility: 4-color suit inks
     tt.setdefault("unlocked_decks", [])
     tt.setdefault("unlocked_felts", [])
     tt.setdefault("unlocked_boards", [])
@@ -148,7 +149,7 @@ _KIND_LOOKUP = {
     "felt": available_felts,
     "board": available_boards,
 }
-_DEFAULT_ROWS = (("Deck", "deck"), ("Felt", "felt"))
+_DEFAULT_ROWS = (("Deck", "deck"), ("Felt", "felt"), ("Four-color", "four_color"))
 
 
 class SkinPicker:
@@ -190,6 +191,11 @@ class SkinPicker:
         h = self.host
         store = tabletop_store(h.settings)
         _, kind = self.rows()[self.row]
+        if kind == "four_color":               # boolean accessibility toggle
+            store["four_color"] = not store.get("four_color", False)
+            h.four_color = store["four_color"]
+            h.save_cb()
+            return
         opts = _KIND_LOOKUP[kind](store)
         cur = getattr(h, kind)
         i = next((k for k, opt in enumerate(opts) if opt.id == cur.id), 0)
@@ -209,17 +215,23 @@ class SkinPicker:
         o.rect(x - 26, y0 - 44, 480, ph, PANEL)
         o.rect(x - 26, y0 - 44, 4, ph, GOLD)
         o.text("TABLE SKINS", x, y0 - 26, size=20, color=EMBER)
+        four_color = tabletop_store(h.settings).get("four_color", False)
         for i, (label, kind) in enumerate(rows):
             yy = y0 + 18 + i * 42
             sel = i == self.row
-            val = getattr(h, kind).name
+            if kind == "four_color":
+                val = "On" if four_color else "Off"
+            else:
+                val = getattr(h, kind).name
             o.text(("> " if sel else "  ") + label, x, yy, size=18,
                    color=TEXT if sel else DIM)
             o.text(f"< {val} >" if sel else val, x + 150, yy, size=18,
                    color=GOLD if sel else DIM)
         preview_y = y0 + 18 + len(rows) * 42
         if any(kind == "deck" for _, kind in rows):
-            card_render.draw_card(o, x + 300, preview_y, 66, 92, Card(1, "S"), h.deck)
+            # preview a diamond so the four-color toggle is visible at a glance
+            card_render.draw_card(o, x + 300, preview_y, 66, 92, Card(1, "D"), h.deck,
+                                  four_color=four_color)
             card_render.draw_card(o, x + 372, preview_y, 66, 92, None, h.deck,
                                   face_up=False)
         o.text("Up/Down: pick   Left/Right: change   Tab: close",

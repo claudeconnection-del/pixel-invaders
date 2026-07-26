@@ -20,7 +20,26 @@ def _darken(c, k):
     return (int(c[0] * k), int(c[1] * k), int(c[2] * k))
 
 
-def draw_card(o, x, y, w, h, card, skin, face_up=True, selected=False):
+# Four-color deck (accessibility): ♠ keeps the deck's black ink, ♥ keeps its
+# red, ♦ becomes blue and ♣ green so all four suits read apart at a glance.
+# Dark-faced decks get the lighter variants so the ink stays legible.
+_FOUR_COLOR_LIGHT_FACE = {"D": [40, 90, 200], "C": [30, 120, 60]}
+_FOUR_COLOR_DARK_FACE = {"D": [120, 170, 255], "C": [120, 210, 140]}
+
+
+def suit_ink(deck, suit, four_color):
+    """The ink color (list [r,g,b]) for `suit` on `deck`. Off: the deck's own
+    black/red inks (♠♣ black, ♥♦ red) — unchanged. On: ♦ → blue, ♣ → green
+    (light variants on dark-faced decks), ♠/♥ keep the deck inks. Pure."""
+    if not four_color or suit not in ("D", "C"):
+        return list(deck.ink_red if suit in ("H", "D") else deck.ink_black)
+    dark_face = sum(deck.face[:3]) < 360
+    table = _FOUR_COLOR_DARK_FACE if dark_face else _FOUR_COLOR_LIGHT_FACE
+    return list(table[suit])
+
+
+def draw_card(o, x, y, w, h, card, skin, face_up=True, selected=False,
+              four_color=False):
     """Draw one card at (x, y). `card` may be None for a face-down slot."""
     o.rect(x, y, w, h, _EDGE)                          # edge / drop shadow
     if not face_up:
@@ -29,12 +48,12 @@ def draw_card(o, x, y, w, h, card, skin, face_up=True, selected=False):
             _outline(o, x, y, w, h, _SEL)
         return
     o.rect(x + 2, y + 2, w - 4, h - 4, _rgba(skin.face))
-    ink = _rgba(skin.ink_red if card.red else skin.ink_black)
+    ink_rgb = suit_ink(skin, card.suit, four_color)
+    ink = _rgba(ink_rgb)
     o.text(card.rank_label, x + 8, y + 5, size=int(h * 0.18), color=ink)
     o.text(card.suit, x + 9, y + 5 + int(h * 0.2), size=int(h * 0.14), color=ink)
     o.text(card.suit, x + w / 2, y + h * 0.36, size=int(h * 0.32),
-           color=_rgba(skin.ink_red if card.red else skin.ink_black, 210),
-           center=True)
+           color=_rgba(ink_rgb, 210), center=True)
     _outline(o, x + 2, y + 2, w - 4, h - 4, _rgba(skin.trim, 120), t=2)
     if selected:
         _outline(o, x, y, w, h, _SEL)
