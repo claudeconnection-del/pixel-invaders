@@ -13,6 +13,37 @@ from datetime import datetime, timezone
 MAX_ITEMS = 50
 
 
+# --------------------------------------------------- visibility (CAB-28)
+def pending_count(profile):
+    """How many score submissions are queued waiting for the server."""
+    return len(profile.get("outbox", []))
+
+
+def status_line(pending, available):
+    """The leaderboard status line for a non-empty outbox, or "" when nothing
+    is pending. Reflects the online/offline state the client already knows."""
+    if pending <= 0:
+        return ""
+    conn = "online" if available else "offline"
+    s = "s" if pending != 1 else ""
+    return f"{pending} score{s} waiting to sync ({conn}) · R: retry now"
+
+
+def retry_summary(before, after, available):
+    """A short toast after a manual retry, from the pending counts before/after
+    the flush and whether the server is reachable. A 4xx-rejected item leaves
+    the queue too, so 'sent' here means 'left the queue', which the caller
+    words as synced when online."""
+    sent = max(0, before - after)
+    if after == 0 and sent:
+        return f"Synced {sent} pending score{'s' if sent != 1 else ''}."
+    if sent:
+        return f"Sent {sent}, {after} still queued."
+    if not available:
+        return "Offline — scores stay queued until the server is reachable."
+    return f"Retrying {after} pending score{'s' if after != 1 else ''}…"
+
+
 class Outbox:
     def __init__(self, profile, net, on_rank=None, save_cb=None):
         self.profile = profile

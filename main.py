@@ -40,6 +40,7 @@ from meta import profile as profile_mod
 from meta import replay as replay_mod
 from meta.achievements import Achievement, AchievementEngine, evaluate_ambient
 from meta.outbox import Outbox
+from meta import outbox as outbox_mod
 from meta.stats import StatsTracker
 
 APP_NAME = "Cabinet Man"  # the product; "Emberlight" is its look (game/theme.py)
@@ -454,10 +455,14 @@ class App:
             self._import_armed = True
             self.settings_msg = "Replace current profile? Import again to confirm."
             return
-        # confirmed: back up the current profile, then swap in the imported one
+        # confirmed: back up the current profile, then swap in the imported one.
+        # Replace the dict CONTENTS in place (not the reference) so every holder
+        # that captured self.profile at construction — the outbox, etc. — keeps
+        # pointing at the live profile.
         self._import_armed = False
         backup = profile_mod.backup_profile()
-        self.profile = imported
+        self.profile.clear()
+        self.profile.update(imported)
         self.save_profile()
         self._apply_imported_settings()
         note = f" (backup: {os.path.basename(backup)})" if backup else ""
@@ -528,6 +533,13 @@ class App:
                 audio.play("menu_move")
                 if self.board_scope == "global":
                     self._request_global_board()
+            elif key == pygame.K_r and outbox_mod.pending_count(self.profile):
+                before = outbox_mod.pending_count(self.profile)
+                self.outbox.drain()                 # existing flush path
+                after = outbox_mod.pending_count(self.profile)
+                self.post_banner(
+                    outbox_mod.retry_summary(before, after, self.net.available), 2.5)
+                audio.play("menu_select")
             elif key in (pygame.K_ESCAPE, pygame.K_RETURN):
                 self.last_rank = None
                 self.state = MENU
@@ -2031,6 +2043,10 @@ class App:
             o.text(entry["name"], self.W / 2 - 220, y, size=24, color=color)
             o.text(f"{entry['score']:,}", self.W / 2 + 40, y, size=24, color=color)
             o.text(entry.get("date", ""), self.W / 2 + 220, y, size=16, color=DIM)
+        pending = outbox_mod.pending_count(self.profile)
+        if pending:
+            o.text(outbox_mod.status_line(pending, self.net.available),
+                   self.W / 2, self.H - 54, size=15, color=theme.GOLD, center=True)
         o.text("Esc: back", self.W / 2, self.H - 30, size=14, color=DIM,
                center=True)
         self.draw_banner_and_toasts()

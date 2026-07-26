@@ -265,10 +265,29 @@ def main():
     from meta.leaderboard import entries
     board = entries(app.profile, "voxelhell", "campaign")
     assert len(board) == 1 and board[0]["score"] > 0
+
+    # outbox visibility (CAB-28): with the server unreachable (no base_url in
+    # smoke), queued scores stay pending; the leaderboard surfaces the count +
+    # R retries them.
+    import meta.outbox as _ob
+    assert not app.net.available            # smoke runs offline (empty server_url)
+    app.profile["outbox"] = []              # start from a clean queue
+    app.outbox.inflight.clear()
+    app.state = game_main.LEADERBOARD
+    app.outbox.queue_score("voxelhell", "campaign", "AAA", 123)
+    app.outbox.queue_score("voxelhell", "campaign", "BBB", 456)
+    pend = _ob.pending_count(app.profile)
+    assert pend == 2, f"expected 2 pending, got {pend}"
+    assert _ob.status_line(pend, False)     # non-empty status line
+    render_frame()                          # draws the pending status line
+    app.handle_keydown(pygame.K_r)          # retry now (offline -> stays queued)
+    render_frame()
+    assert app.wave_banner is not None      # retry feedback banner
+    assert _ob.pending_count(app.profile) == 2   # still queued while offline
     app.handle_keydown(pygame.K_ESCAPE)
     assert app.state == game_main.MENU
     print(f"initials + leaderboard OK (entry={board[0]['name']} "
-          f"{board[0]['score']})")
+          f"{board[0]['score']}, {pend} pending surfaced)")
 
     # replay theater: browse the saved replay and watch it back in-engine.
     # Re-sim playback must advance the run and stay a read-only spectator view

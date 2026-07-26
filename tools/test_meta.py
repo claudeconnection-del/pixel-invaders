@@ -267,6 +267,35 @@ def profile_export_import():
     print("profile export/import OK (round-trip, backfill, corrupt->None, backup)")
 
 
+def outbox_visibility():
+    from meta import outbox as outbox_mod
+    # pending count reads the profile's outbox list
+    assert outbox_mod.pending_count({}) == 0
+    assert outbox_mod.pending_count({"outbox": [{"id": "a"}, {"id": "b"}]}) == 2
+
+    # status line: empty when nothing pending, else count + online/offline + hint
+    assert outbox_mod.status_line(0, True) == ""
+    line = outbox_mod.status_line(3, False)
+    assert "3 scores waiting" in line and "offline" in line and "R: retry" in line
+    assert "1 score " in outbox_mod.status_line(1, True)   # singular + online
+    assert "online" in outbox_mod.status_line(1, True)
+
+    # retry summary from before/after counts
+    assert "Synced 3" in outbox_mod.retry_summary(3, 0, True)
+    assert outbox_mod.retry_summary(3, 1, True) == "Sent 2, 1 still queued."
+    assert "Offline" in outbox_mod.retry_summary(2, 2, False)      # nothing left
+    assert "Retrying 2" in outbox_mod.retry_summary(2, 2, True)    # online, in flight
+
+    # queueing itself is unchanged: an Outbox still enqueues to profile["outbox"]
+    class _Net:
+        available = False
+    prof = {}
+    ob = outbox_mod.Outbox(prof, _Net())
+    ob.queue_score("voxelhell", "campaign", "AAA", 100)
+    assert outbox_mod.pending_count(prof) == 1
+    print("outbox visibility OK (pending count, status line, retry summary)")
+
+
 if __name__ == "__main__":
     migration_v1()
     p = run_campaign_with_meta()
@@ -276,4 +305,5 @@ if __name__ == "__main__":
     replay_unsigned_legacy_loads_unverified()
     replay_canonicalization_stable_across_key_order()
     profile_export_import()
+    outbox_visibility()
     print("ALL META TESTS PASSED")

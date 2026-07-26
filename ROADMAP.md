@@ -233,6 +233,13 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   swaps the live profile, and re-applies cheap settings (audio/quality; display settings need a
   restart). Tests: export→import round-trip, older/minimal backfill, corrupt→None, backup
   (`tools/test_meta.py`); smoke drives the export→import action rows.
+- **Leaderboard outbox visibility + manual retry (CAB-28).** ✅ `meta/outbox.py` gained pure
+  helpers `pending_count(profile)`, `status_line(pending, available)` ("N scores waiting to sync
+  (online/offline) · R: retry now"), and `retry_summary(before, after, available)` — no change to
+  the queueing/flush semantics. The HIGH SCORES screen shows the status line when the outbox is
+  non-empty; `R` calls the existing `outbox.drain()` and banners the retry summary. Tests: the
+  three helpers + queueing-unchanged in `tools/test_meta.py`; smoke queues offline scores and
+  drives the R retry.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
