@@ -194,6 +194,18 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   shows a ♦ so the change is visible). Threaded through solitaire/rummy/poker draw calls. Tests:
   `suit_ink` truth-table (off matches deck inks; on recolors D/C and differs from both; dark decks
   get lighter variants; store backfills) in `tools/test_cards.py`; smoke toggles it live via the picker.
+- **Solitaire Vegas scoring mode (CAB-22).** ✅ Third mode `("vegas", "VEGAS")` — classic arcade
+  rules: draw-3 with 3 stock passes, −$52 buy-in per deal, +$5 per card home (−$5 taken back off),
+  bankroll **cumulative** across deals in `section["lifetime"]["sol_vegas_bank"]` (goes negative,
+  that's the fun). `games/solitaire/model.py` gained `pass_limit`/`recycles` (recycle refused past
+  the limit — in undo snapshots) and a `vegas_delta` = `5 * cards_home` property (no extra state —
+  taking a card off lowers cards_home, so ±$5 falls out naturally). `games/solitaire/game.py`
+  applies the buy-in on each deal and banks foundation gains via a per-frame `cards_home` diff
+  (covers clicks, autoplay, and undo uniformly; new deals reset the baseline so they never refund);
+  HUD shows `BANK $±n` colored by sign + this-deal take + passes used. Two achievements
+  (`vegas_in_black` — bank ≥ $0 after 10+ deals; `vegas_deals_50`). Tests: pass-limit refusal,
+  delta math incl. take-back, cumulative bank across two deals, achievement predicates
+  (`tools/test_cards.py`); smoke runs a live Vegas deal + rematch asserting the bank math.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

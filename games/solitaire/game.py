@@ -13,7 +13,7 @@ import random
 import pygame
 
 from arcade.game_api import GameInfo, GameRun
-from game.theme import TEXT, DIM, EMBER, GOLD, PANEL
+from game.theme import TEXT, DIM, EMBER, GOLD, PANEL, GOOD, DANGER
 from games.cards import render as card_render
 from games.cards import skins
 from games.cards import table
@@ -26,13 +26,17 @@ INFO = GameInfo(
     "solitaire", "SOLITAIRE",
     "Klondike — clear the tableau, build the foundations.",
     showcase_sprite="cube",
-    modes=[("draw1", "DRAW ONE"), ("draw3", "DRAW THREE")],
+    modes=[("draw1", "DRAW ONE"), ("draw3", "DRAW THREE"), ("vegas", "VEGAS")],
     has_scores=False, attract=False, game_music=True, music_pool="menu",
 )
 
 ACHIEVEMENTS = _SOL_ACHIEVEMENTS
 _GRIND_KEYS = ("sol_games", "sol_wins", "sol_streak", "sol_best_streak",
                "sol_best_time")
+_VEGAS_KEYS = ("sol_vegas_bank", "sol_vegas_deals")
+VEGAS_BUYIN = 52          # classic Vegas: -$52 per deal
+# Classic arcade Vegas: draw-3 with 3 stock passes.
+_VEGAS_DRAW, _VEGAS_PASSES = 3, 3
 
 # table layout (logical UI units; the table is centred in the full width)
 CARD_W, CARD_H = 96, 132
@@ -49,9 +53,13 @@ _SUIT_NAME = {"S": "spades", "H": "hearts", "D": "diamonds", "C": "clubs"}
 class SolitaireRun(GameRun):
     def __init__(self, mode, rng):
         self.mode = mode or "draw1"
-        self.draw_count = 3 if self.mode == "draw3" else 1
+        self.vegas = self.mode == "vegas"
+        self.draw_count = _VEGAS_DRAW if self.vegas \
+            else (3 if self.mode == "draw3" else 1)
+        self._pass_limit = _VEGAS_PASSES if self.vegas else None
         self.rng = rng
-        self.model = Solitaire(self.draw_count).deal(rng)
+        self.model = Solitaire(self.draw_count, self._pass_limit).deal(rng)
+        self._vegas_home = 0        # cards_home last frame (for the bank diff)
         self.time = 0.0
         self.events = []
         self.section = None
@@ -97,9 +105,38 @@ class SolitaireRun(GameRun):
         life = section["lifetime"]
         for k in _GRIND_KEYS:
             life.setdefault(k, 0)
+        for k in _VEGAS_KEYS:
+            life.setdefault(k, 0)
         life["sol_games"] += 1          # this freshly-dealt game counts as played
+        if self.vegas:
+            self._start_vegas_deal(life)   # buy-in for the opening deal
         self._sync_unlocks()
         self.save_cb()
+
+    def _start_vegas_deal(self, life):
+        """Take the buy-in for a fresh Vegas deal and reset the bank diff
+        baseline. Bankroll is cumulative across deals (can go negative)."""
+        life["sol_vegas_bank"] -= VEGAS_BUYIN
+        life["sol_vegas_deals"] += 1
+        self._vegas_home = 0
+
+    def _accrue_vegas(self):
+        """Bank +$5 per card newly home / -$5 per card taken back off, via a
+        per-frame diff of cards_home — covers clicks, autoplay, and undo in one
+        place. New deals reset the baseline separately so they never refund."""
+        if self.section is None:
+            return
+        home = self.model.cards_home
+        if home != self._vegas_home:
+            self.section["lifetime"]["sol_vegas_bank"] += 5 * (home - self._vegas_home)
+            self._vegas_home = home
+            self.save_cb()
+
+    @property
+    def vegas_bank(self):
+        if self.section is None:
+            return 0
+        return self.section["lifetime"].get("sol_vegas_bank", 0)
 
     def _set_felt(self, felt):
         self.felt = felt
@@ -128,6 +165,8 @@ class SolitaireRun(GameRun):
     def update(self, dt, inp):
         self.time += dt                     # felt keeps animating even in panel
         self._sync_unlocks()                # grant cosmetics as achievements land
+        if self.vegas:
+            self._accrue_vegas()
         if self.autocompleting:
             self._tick_autocomplete(dt)
             self._prev_mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
@@ -204,12 +243,14 @@ class SolitaireRun(GameRun):
     def _new_deal(self):
         if self.section is not None and not self.won_flag:
             self.section["lifetime"]["sol_streak"] = 0   # gave up: streak breaks
-        self.model = Solitaire(self.draw_count).deal(random.Random())
+        self.model = Solitaire(self.draw_count, self._pass_limit).deal(random.Random())
         self.sel = None
         self.won_flag = False
         self.autocompleting = False
         if self.section is not None:
             self.section["lifetime"]["sol_games"] += 1
+            if self.vegas:
+                self._start_vegas_deal(self.section["lifetime"])
             self.save_cb()
         self.emit("sol_deal")
 
@@ -465,6 +506,15 @@ class SolitaireRun(GameRun):
         o.text("Click: pick/drop   Double-click: send home   U: undo   "
                "Space: autoplay   N: new deal   Tab: skins",
                W / 2, H - 34, size=14, color=DIM, center=True)
+        if self.vegas:
+            bank = self.vegas_bank
+            deal_take = self.model.vegas_delta
+            col = GOOD if bank >= 0 else DANGER
+            sign = "-$" if bank < 0 else "$"
+            o.text(f"BANK {sign}{abs(bank)}", 24, 20, size=22, color=col)
+            o.text(f"this deal +${deal_take}   passes "
+                   f"{self.model.recycles}/{self.model.pass_limit}",
+                   24, 48, size=14, color=DIM)
 
     def _draw_win(self, o, W, H):
         o.rect(0, 0, W, H, (10, 8, 6, 150))

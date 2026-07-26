@@ -17,8 +17,11 @@ from games.cards.deck import Card, SUITS, make_deck, shuffle
 
 
 class Solitaire:
-    def __init__(self, draw_count=1):
+    def __init__(self, draw_count=1, pass_limit=None):
         self.draw_count = 3 if draw_count == 3 else 1
+        # Vegas: max stock recycles allowed (None = unlimited, the casual rules).
+        self.pass_limit = pass_limit
+        self.recycles = 0
         self.tableau = [{"down": [], "up": []} for _ in range(7)]
         self.stock = []
         self.waste = []
@@ -43,6 +46,7 @@ class Solitaire:
         self.foundations = {s: [] for s in SUITS}
         self.moves = 0
         self.undo_count = 0
+        self.recycles = 0
         self.history = []
         return self
 
@@ -70,6 +74,7 @@ class Solitaire:
             "waste": list(self.waste),
             "foundations": {s: list(v) for s, v in self.foundations.items()},
             "moves": self.moves,
+            "recycles": self.recycles,
         }
 
     def _restore(self, snap):
@@ -79,6 +84,7 @@ class Solitaire:
         self.waste = list(snap["waste"])
         self.foundations = {s: list(v) for s, v in snap["foundations"].items()}
         self.moves = snap["moves"]
+        self.recycles = snap.get("recycles", 0)
 
     def undo(self):
         if not self.history:
@@ -96,13 +102,18 @@ class Solitaire:
 
     # -------------------------------------------------------------- moves
     def draw(self):
-        """Turn draw_count cards from stock to waste, or recycle when empty."""
+        """Turn draw_count cards from stock to waste, or recycle when empty.
+        In Vegas (pass_limit set) a recycle beyond the limit is refused."""
         if not self.stock and not self.waste:
             return False
+        if not self.stock and self.pass_limit is not None \
+                and self.recycles >= self.pass_limit:
+            return False                                # out of passes (Vegas)
         self._commit()
         if not self.stock:
             self.stock = list(reversed(self.waste))     # recycle for another pass
             self.waste = []
+            self.recycles += 1
         else:
             n = min(self.draw_count, len(self.stock))
             moved = self.stock[-n:]
@@ -198,6 +209,13 @@ class Solitaire:
     @property
     def cards_home(self):
         return sum(len(v) for v in self.foundations.values())
+
+    @property
+    def vegas_delta(self):
+        """This deal's Vegas foundation score: +$5 per card currently home.
+        Taking a card back off a foundation lowers cards_home, so this tracks
+        both directions (+5 to a foundation, -5 off it) with no extra state."""
+        return 5 * self.cards_home
 
     @property
     def won(self):

@@ -451,6 +451,28 @@ def main():
     print(f"solitaire OK (play / skins / auto-complete win + unlock, "
           f"{sol_sec['lifetime']['sol_games']} games)")
 
+    # solitaire VEGAS mode (CAB-22): buy-in on deal, bank tracks foundation
+    # gains, pass limit enforced, bankroll cumulative across deals.
+    app.game_id = "solitaire"
+    app.state = game_main.MENU
+    app.start_run("vegas")
+    vr = app.run
+    assert vr.vegas and vr.model.pass_limit == 3 and vr.draw_count == 3
+    vlife = profile_mod.game_section(app.profile, "solitaire")["lifetime"]
+    assert vlife["sol_vegas_bank"] == -52          # opening buy-in
+    vr.model.foundations["S"] = [Card(1, "S"), Card(2, "S"), Card(3, "S")]
+    app.gameplay_input = lambda: InputState()
+    app.update_playing(dt)                          # accrues +$15
+    render_frame()                                  # draws the BANK readout
+    assert vlife["sol_vegas_bank"] == -52 + 15
+    vr.handle_key(pygame.K_n)                        # new deal: another -52
+    assert vlife["sol_vegas_deals"] == 2 and vlife["sol_vegas_bank"] == -52 + 15 - 52
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print(f"solitaire vegas OK (bank ${vlife['sol_vegas_bank']}, "
+          f"{vlife['sol_vegas_deals']} deals)")
+
     # gin rummy (TABLETOP): deal, draw the table, drive human + house AI turns
     # until a hand resolves; exercises the meld engine, render, and result screen
     from games.rummy.model import deadwood as rm_dead

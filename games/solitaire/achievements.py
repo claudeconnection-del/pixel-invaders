@@ -37,4 +37,15 @@ ACHIEVEMENTS = [
         "founder", "Foundation Founder", "Win 250 games of Solitaire",
         lambda e, d, life, run: life.get("sol_wins", 0) >= 250,
         progress=_progress("sol_wins", 250)),
+    # Vegas mode (CAB-22)
+    Achievement(
+        "vegas_in_black", "In the Black",
+        "Keep your Vegas bankroll at $0 or better after 10+ deals",
+        lambda e, d, life, run: (life.get("sol_vegas_deals", 0) >= 10
+                                 and life.get("sol_vegas_bank", 0) >= 0),
+        progress=lambda life, run: (min(life.get("sol_vegas_deals", 0), 10), 10)),
+    Achievement(
+        "vegas_deals_50", "High Roller", "Play 50 deals of Vegas Solitaire",
+        lambda e, d, life, run: life.get("sol_vegas_deals", 0) >= 50,
+        progress=_progress("sol_vegas_deals", 50)),
 ]

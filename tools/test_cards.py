@@ -172,6 +172,64 @@ def test_collect_and_win():
     print("collect + win OK")
 
 
+def test_vegas_rules():
+    # pass-limit refusal: draw-1 Vegas with 1 allowed recycle
+    m = Solitaire(draw_count=1, pass_limit=1).deal(random.Random(3))
+    # drain the stock to the waste
+    while m.stock:
+        assert m.draw()
+    assert m.recycles == 0
+    assert m.draw()                # first recycle allowed
+    assert m.recycles == 1
+    while m.stock:                 # drain again
+        m.draw()
+    assert not m.draw()            # second recycle refused (pass limit hit)
+    assert m.recycles == 1
+
+    # vegas_delta math incl. foundation take-back (+5 on, -5 off)
+    v = Solitaire(draw_count=3, pass_limit=3)
+    v.foundations = {"S": [Card(1, "S")], "H": [], "D": [], "C": []}
+    v.tableau = [{"down": [], "up": []} for _ in range(7)]
+    assert v.vegas_delta == 5                    # one card home
+    v.foundations["S"].append(Card(2, "S"))
+    assert v.vegas_delta == 10                   # two home
+    # take one back off onto a tableau (needs a valid landing: 2S is black,
+    # goes on a red 3) — simulate the take-off directly via cards_home
+    v.foundations["S"].pop()
+    assert v.vegas_delta == 5                     # back to one home (-$5)
+
+    # cumulative bank across two simulated deals via the game run's helpers
+    import games.solitaire.game as solgame
+    run = solgame.create_run("vegas", random.Random(5))
+    section = {"achievements": {}, "lifetime": {}, "unlocked_skins": []}
+    run.attach_profile(section, {}, lambda: None)
+    life = section["lifetime"]
+    assert run.vegas and life["sol_vegas_bank"] == -52   # opening buy-in
+    assert life["sol_vegas_deals"] == 1
+    # bank a few foundation cards, then deal again: buy-in stacks, gains keep
+    run.model.foundations["S"] = [Card(1, "S"), Card(2, "S")]
+    run._accrue_vegas()                           # accrues +$10 (per-frame diff)
+    assert life["sol_vegas_bank"] == -52 + 10
+    run._new_deal()                               # second deal: another -52
+    assert life["sol_vegas_deals"] == 2
+    assert life["sol_vegas_bank"] == -52 + 10 - 52
+    print("vegas rules OK (pass-limit refusal, delta math, cumulative bank)")
+
+
+def test_vegas_achievements():
+    from games.solitaire.achievements import ACHIEVEMENTS
+    by = {a.id: a for a in ACHIEVEMENTS}
+    assert by["vegas_in_black"].check(None, None,
+                                      {"sol_vegas_deals": 10, "sol_vegas_bank": 5}, {})
+    assert not by["vegas_in_black"].check(None, None,
+                                          {"sol_vegas_deals": 10, "sol_vegas_bank": -5}, {})
+    assert not by["vegas_in_black"].check(None, None,
+                                          {"sol_vegas_deals": 9, "sol_vegas_bank": 100}, {})
+    assert by["vegas_deals_50"].check(None, None, {"sol_vegas_deals": 50}, {})
+    assert by["vegas_deals_50"].progress({"sol_vegas_deals": 20}, {}) == (20, 50)
+    print("vegas achievements OK (in_black gated on deals+bank, deals_50 progress)")
+
+
 def test_solitaire_achievements():
     from games.solitaire.achievements import ACHIEVEMENTS
     by = {a.id: a for a in ACHIEVEMENTS}
@@ -229,6 +287,8 @@ def main():
     test_stock_draw_recycle()
     test_move_rules_and_undo()
     test_collect_and_win()
+    test_vegas_rules()
+    test_vegas_achievements()
     test_solitaire_achievements()
     test_autocomplete_and_double_click()
     print("ALL CARD TESTS PASSED")
