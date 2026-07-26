@@ -3,4 +3,4 @@ cabinet view + INFO in game.py; achievements arrive in a later increment.
 """
 from games.solitaire.model import Solitaire  # noqa: F401
 from games.solitaire.game import (  # noqa: F401
-    INFO, ACHIEVEMENTS, create_run, create_pilot)
+    INFO, ACHIEVEMENTS, RULES_TEXT, create_run, create_pilot)

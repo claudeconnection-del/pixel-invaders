@@ -424,6 +424,15 @@ def main():
     sr.handle_key(pygame.K_TAB)
     assert not sr.picker.open
 
+    # rules overlay (H): opens, renders, closes; mutually exclusive with picker
+    sr.handle_key(pygame.K_TAB)             # open the picker first
+    assert sr.picker.open
+    sr.handle_key(pygame.K_h)               # H closes the picker + opens rules
+    assert sr.rules.open and not sr.picker.open
+    render_frame()                          # draws the rules panel
+    sr.handle_key(pygame.K_h)               # H closes it
+    assert not sr.rules.open
+
     from games.cards.deck import Card
     full = lambda s: [Card(r, s) for r in range(1, 14)]
     sr.model.foundations = {"S": full("S"), "H": full("H"), "D": full("D"),
@@ -482,6 +491,11 @@ def main():
     assert app.state == game_main.PLAYING
     rr = app.run
     app.gameplay_input = lambda: InputState()
+    rr.handle_key(pygame.K_h)               # rules overlay opens + renders
+    assert rr.rules.open
+    render_frame()
+    rr.handle_key(pygame.K_h)               # and closes
+    assert not rr.rules.open
     app.update_playing(dt)                  # one real update tick (P1's turn)
     for _ in range(80):
         m = rr.model

@@ -33,6 +33,30 @@ INFO = GameInfo(
 ACHIEVEMENTS = _BG_ACHIEVEMENTS
 _GRIND_KEYS = ("bg_games", "bg_wins", "bg_gammons", "bg_backgammons")
 
+RULES_TEXT = [
+    "OBJECTIVE",
+    "Bring all 15 of your checkers home, then bear them all off first.",
+    "You (amber) move toward your home board; the house (frost) mirrors you.",
+    "",
+    "PLAY",
+    "Roll the dice, then move one checker per die (doubles = four moves).",
+    "You must use both dice if any legal sequence lets you.",
+    "Land on a point with 2+ enemy checkers? Blocked. A lone blot is hit —",
+    "  it goes to the bar and must re-enter before you do anything else.",
+    "",
+    "BEARING OFF",
+    "Once all 15 are in your home board, bear them off with exact or",
+    "higher rolls from the highest occupied point.",
+    "",
+    "SCORING",
+    "Single win, gammon (loser bore off none), or backgammon",
+    "(loser bore off none and still has a checker in your home/bar).",
+    "",
+    "CONTROLS",
+    "R: roll   Click a source then a destination   U: undo the roll",
+    "N: rematch   Tab: skins   H: rules",
+]
+
 HUMAN, HOUSE = "A", "B"
 
 BOARD_W, BOARD_H = 900, 460
@@ -68,6 +92,8 @@ class BackgammonRun(GameRun):
         self.felt = skins.felt_by_id("emberlight")
         self._felt_preset = table.make_felt_preset(self.felt)
         self.picker = table.SkinPicker(self)
+        self.rules = table.RulesOverlay(self)
+        self.rules_title = INFO.name
 
         self.legal_seqs = []      # all maximal legal sequences for this roll
         self.chosen = []          # moves picked so far this turn
@@ -138,9 +164,12 @@ class BackgammonRun(GameRun):
                 self._ai_timer = 0.0
                 self._house_turn()
         mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
-        if not self.picker.open and mb and not self._prev_mb:
+        if not self.picker.open and not self.rules.open and mb and not self._prev_mb:
             self._click(inp.aim_x, inp.aim_y)
         self._prev_mb = mb
+
+    def rules_lines(self):
+        return RULES_TEXT
 
     def _house_turn(self):
         m = self.model
@@ -177,6 +206,13 @@ class BackgammonRun(GameRun):
 
     # ---------------------------------------------------------------- input
     def handle_key(self, key):
+        if key == pygame.K_h:
+            self.picker.open = False
+            self.rules.toggle()
+            return True
+        if self.rules.open:
+            self.rules.handle_key(key)
+            return True
         if self.picker.open:
             self.picker.handle_key(key)
             return True
@@ -360,12 +396,14 @@ class BackgammonRun(GameRun):
         self._draw_dice(o)
         self._draw_roll_button(o)
 
-        o.text("Click: pick/place   U: undo roll   N: rematch   Tab: skins",
+        o.text("Click: pick/place   U: undo roll   N: rematch   Tab: skins   H: rules",
                W / 2, H - 32, size=13, color=DIM, center=True)
         if m.winner:
             self._draw_result(o, W, H)
         if self.picker.open:
             self.picker.draw(o)
+        if self.rules.open:
+            self.rules.draw(o, W, H)
 
     def _draw_point(self, o, i, x, y, w, h, top_row):
         color = (*self.board.point_light, 255) if i % 2 == 0 \

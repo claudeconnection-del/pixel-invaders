@@ -206,6 +206,14 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   (`vegas_in_black` — bank ≥ $0 after 10+ deals; `vegas_deals_50`). Tests: pass-limit refusal,
   delta math incl. take-back, cumulative bank across two deals, achievement predicates
   (`tools/test_cards.py`); smoke runs a live Vegas deal + rematch asserting the bank math.
+- **Per-game rules overlay (CAB-24).** ✅ Each tabletop game exports `RULES_TEXT` (objective /
+  play / scoring / controls, re-exported from its package `__init__`); `games/cards/table.py`
+  gained `draw_rules_overlay()` + a `RulesOverlay` state holder (dim wash + PANEL/GOLD panel,
+  arrow-key scroll, styled like the SkinPicker). `H` toggles it in all four games (mutually
+  exclusive with the skin picker — opening one closes the other), clicks are swallowed while open,
+  and the footer hint gained "H: rules". Tests: every registered TABLETOP module has non-empty
+  `RULES_TEXT` with lines under the length cap (`tools/test_cards.py`, iterating the category);
+  smoke toggles it live in Solitaire + Rummy.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

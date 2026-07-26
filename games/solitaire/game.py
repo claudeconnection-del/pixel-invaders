@@ -38,6 +38,26 @@ VEGAS_BUYIN = 52          # classic Vegas: -$52 per deal
 # Classic arcade Vegas: draw-3 with 3 stock passes.
 _VEGAS_DRAW, _VEGAS_PASSES = 3, 3
 
+RULES_TEXT = [
+    "OBJECTIVE",
+    "Build all four foundations up from Ace to King, one per suit.",
+    "",
+    "PLAY",
+    "Tableau: stack cards down in alternating colours (red on black).",
+    "Move a whole ordered run at once. Empty columns take a King.",
+    "Click the stock to turn cards to the waste; play from the waste.",
+    "Double-click a card to send it straight to its foundation.",
+    "",
+    "MODES",
+    "Draw One / Draw Three: turn 1 or 3 stock cards at a time.",
+    "Vegas: -$52 buy-in, +$5 per card home, limited stock passes;",
+    "  your bankroll carries across deals.",
+    "",
+    "CONTROLS",
+    "Click: pick/drop   Double-click: send home   U: undo",
+    "Space: autoplay   N: new deal   Tab: skins   H: rules",
+]
+
 # table layout (logical UI units; the table is centred in the full width)
 CARD_W, CARD_H = 96, 132
 GAP = 20
@@ -71,6 +91,8 @@ class SolitaireRun(GameRun):
         self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
         self.picker = table.SkinPicker(self)   # shared TAB deck/felt picker
+        self.rules = table.RulesOverlay(self)  # shared H rules overlay
+        self.rules_title = INFO.name
 
         self.sel = None            # current selection (source)
         self._prev_mb = False
@@ -172,10 +194,14 @@ class SolitaireRun(GameRun):
             self._prev_mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
             return
         mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
-        if not self.picker.open and mb and not self._prev_mb:
+        if not self.picker.open and not self.rules.open and mb and not self._prev_mb:
             self._click(inp.aim_x, inp.aim_y)
         self._prev_mb = mb
-        self._hover = None if self.picker.open else self._hit(inp.aim_x, inp.aim_y)
+        self._hover = None if (self.picker.open or self.rules.open) \
+            else self._hit(inp.aim_x, inp.aim_y)
+
+    def rules_lines(self):
+        return RULES_TEXT
 
     def _tick_autocomplete(self, dt):
         if self.won_flag:
@@ -222,6 +248,13 @@ class SolitaireRun(GameRun):
             self.sel = None
 
     def handle_key(self, key):
+        if key == pygame.K_h:               # rules always toggle (closes the picker)
+            self.picker.open = False
+            self.rules.toggle()
+            return True
+        if self.rules.open:
+            self.rules.handle_key(key)
+            return True
         if self.picker.open:
             self.picker.handle_key(key)
             return True
@@ -449,6 +482,8 @@ class SolitaireRun(GameRun):
             self._draw_win(o, W, H)
         if self.picker.open:
             self.picker.draw(o)
+        if self.rules.open:
+            self.rules.draw(o, W, H)
 
     def _draw_auto_prompt(self, o, W):
         """Show the auto-complete affordance once the board is solved."""
@@ -504,7 +539,7 @@ class SolitaireRun(GameRun):
         o.text(f"{self.model.cards_home}/52 home   moves {self.model.moves}",
                24, H - 34, size=15, color=DIM)
         o.text("Click: pick/drop   Double-click: send home   U: undo   "
-               "Space: autoplay   N: new deal   Tab: skins",
+               "Space: autoplay   N: new deal   Tab: skins   H: rules",
                W / 2, H - 34, size=14, color=DIM, center=True)
         if self.vegas:
             bank = self.vegas_bank

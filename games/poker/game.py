@@ -28,6 +28,26 @@ ACHIEVEMENTS = _POKER_ACHIEVEMENTS
 _GRIND_KEYS = ("vp_credits", "vp_rebuys", "vp_hands", "vp_paid",
                "vp_full_houses", "vp_best_credits")
 
+RULES_TEXT = [
+    "OBJECTIVE",
+    "Draw a paying poker hand — Jacks or Better pays out.",
+    "",
+    "PLAY",
+    "Set your bet (1-5), then DEAL five cards.",
+    "Click cards (or 1-5) to HOLD the ones you keep, then DRAW.",
+    "Un-held cards are replaced; the final hand is paid.",
+    "",
+    "PAYTABLE (per coin bet)",
+    "Royal Flush 250   Straight Flush 50   Four of a Kind 25",
+    "Full House 9   Flush 6   Straight 4   Three of a Kind 3",
+    "Two Pair 2   Jacks or Better 1",
+    "Max bet (5) royal flush pays the 4000 jackpot.",
+    "",
+    "CONTROLS",
+    "Left/Right: bet   M: max   D: deal/draw   1-5/click: hold",
+    "R: rebuy   Tab: skins   H: rules",
+]
+
 CARD_W, CARD_H = 90, 126
 GAP = 20
 REBUY_AMOUNT = 200
@@ -50,6 +70,8 @@ class VideoPokerRun(GameRun):
         self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
         self.picker = table.SkinPicker(self)
+        self.rules = table.RulesOverlay(self)
+        self.rules_title = INFO.name
 
         self.message = "Set your bet and DEAL."
         self._prev_mb = False
@@ -110,9 +132,12 @@ class VideoPokerRun(GameRun):
         self.time += dt
         self._sync_unlocks()                # grant cosmetics as achievements land
         mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
-        if not self.picker.open and mb and not self._prev_mb:
+        if not self.picker.open and not self.rules.open and mb and not self._prev_mb:
             self._click(inp.aim_x, inp.aim_y)
         self._prev_mb = mb
+
+    def rules_lines(self):
+        return RULES_TEXT
 
     def _save_credits(self):
         if self.section is not None:
@@ -123,6 +148,13 @@ class VideoPokerRun(GameRun):
 
     # ---------------------------------------------------------------- input
     def handle_key(self, key):
+        if key == pygame.K_h:
+            self.picker.open = False
+            self.rules.toggle()
+            return True
+        if self.rules.open:
+            self.rules.handle_key(key)
+            return True
         if self.picker.open:
             self.picker.handle_key(key)
             return True
@@ -251,10 +283,12 @@ class VideoPokerRun(GameRun):
         self._draw_buttons(o)
 
         o.text("Click/1-5: hold   D: deal/draw   Left/Right: bet   "
-               "M: max bet   R: rebuy   Tab: skins",
+               "M: max bet   R: rebuy   Tab: skins   H: rules",
                W / 2, H - 32, size=13, color=DIM, center=True)
         if self.picker.open:
             self.picker.draw(o)
+        if self.rules.open:
+            self.rules.draw(o, W, H)
 
     def _draw_paytable(self, o):
         m = self.model

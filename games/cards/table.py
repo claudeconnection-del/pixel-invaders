@@ -141,6 +141,63 @@ def _draw_pattern(o, W, H, cols, pat):
                 o.rect(x - 3, y - 3, 6, 6, strong)
 
 
+# ------------------------------------------------------------- rules overlay
+def draw_rules_overlay(o, W, H, title, lines, scroll=0):
+    """A centered rules/help panel (dim wash + PANEL card with a GOLD accent
+    bar), styled like the SkinPicker. `scroll` is the first visible line index
+    when the text is taller than the panel. Returns the max scroll so the
+    caller can clamp arrow-key paging."""
+    o.rect(0, 0, W, H, (8, 6, 4, 190))
+    pw = min(W - 120, 620)
+    line_h = 24
+    max_visible = 16
+    visible = min(len(lines), max_visible)
+    ph = 70 + visible * line_h + 30
+    px = (W - pw) / 2
+    py = (H - ph) / 2
+    o.rect(px, py, pw, ph, PANEL)
+    o.rect(px, py, 4, ph, GOLD)
+    o.text(title, px + 24, py + 18, size=22, color=EMBER)
+    max_scroll = max(0, len(lines) - max_visible)
+    scroll = max(0, min(scroll, max_scroll))
+    for i in range(visible):
+        line = lines[scroll + i]
+        y = py + 54 + i * line_h
+        o.text(line, px + 24, y, size=15, color=TEXT if line else DIM)
+    hint = "H or Tab: close"
+    if max_scroll:
+        hint = "Up/Down: scroll   " + hint
+    o.text(hint, px + 24, py + ph - 24, size=13, color=DIM)
+    return max_scroll
+
+
+class RulesOverlay:
+    """Small state holder for the H-key rules overlay, shared across tabletop
+    games. `host` must expose `RULES_TEXT`-style `rules_lines()` + `rules_title`."""
+
+    def __init__(self, host):
+        self.host = host
+        self.open = False
+        self.scroll = 0
+        self._max_scroll = 0
+
+    def toggle(self):
+        self.open = not self.open
+        self.scroll = 0
+
+    def handle_key(self, key):
+        if key in (pygame.K_h, pygame.K_TAB):
+            self.open = False
+        elif key in (pygame.K_UP, pygame.K_w):
+            self.scroll = max(0, self.scroll - 1)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.scroll = min(self._max_scroll, self.scroll + 1)
+
+    def draw(self, o, W, H):
+        self._max_scroll = draw_rules_overlay(
+            o, W, H, self.host.rules_title, self.host.rules_lines(), self.scroll)
+
+
 # ------------------------------------------------------------- skin picker
 # kind -> (attribute name on the host == kind, available_*(store) lookup,
 # whether setting it needs the host's special setter instead of plain assign)

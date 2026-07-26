@@ -172,6 +172,22 @@ def test_collect_and_win():
     print("collect + win OK")
 
 
+def test_tabletop_rules_text():
+    """Every registered TABLETOP game exports a non-empty RULES_TEXT with
+    lines under the render length cap."""
+    from games import games_in_category, load_games
+    games = load_games()
+    for gid in games_in_category("TABLETOP"):
+        module = games[gid]
+        rules = getattr(module, "RULES_TEXT", None)
+        assert rules, f"{gid} has no RULES_TEXT"
+        assert any(line.strip() for line in rules), f"{gid} RULES_TEXT all blank"
+        for line in rules:
+            assert len(line) <= 72, f"{gid} rules line too long: {line!r}"
+    print(f"tabletop rules text OK ({len(games_in_category('TABLETOP'))} games "
+          "have RULES_TEXT)")
+
+
 def test_vegas_rules():
     # pass-limit refusal: draw-1 Vegas with 1 allowed recycle
     m = Solitaire(draw_count=1, pass_limit=1).deal(random.Random(3))
@@ -287,6 +303,7 @@ def main():
     test_stock_draw_recycle()
     test_move_rules_and_undo()
     test_collect_and_win()
+    test_tabletop_rules_text()
     test_vegas_rules()
     test_vegas_achievements()
     test_solitaire_achievements()

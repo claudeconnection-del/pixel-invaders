@@ -30,6 +30,28 @@ ACHIEVEMENTS = _RUMMY_ACHIEVEMENTS
 _GRIND_KEYS = ("rm_hands", "rm_hand_wins", "rm_gins", "rm_undercuts",
                "rm_game_wins", "rm_streak", "rm_best_streak")
 
+RULES_TEXT = [
+    "OBJECTIVE",
+    "Form your 10-card hand into melds and knock with low deadwood.",
+    "First to 100 points over successive hands wins the game.",
+    "",
+    "MELDS & DEADWOOD",
+    "Meld = a set (3-4 of a rank) or a run (3+ in one suit, Ace low).",
+    "Deadwood = unmelded card values (Ace 1, faces 10, else pip).",
+    "",
+    "PLAY",
+    "On your turn: draw the stock (blind) or the discard, then discard.",
+    "Knock when your deadwood is 10 or less; gin = zero deadwood.",
+    "",
+    "SCORING",
+    "Knock: score the difference in deadwood.  Gin: +25 bonus.",
+    "Undercut (defender ties or beats the knocker): defender +25.",
+    "After a non-gin knock the defender lays off onto your melds.",
+    "",
+    "CONTROLS",
+    "Click: draw / discard   K: knock   N: next hand   Tab: skins   H: rules",
+]
+
 CARD_W, CARD_H = 90, 126
 FAN = 74                   # hand fan spacing
 GROUP_GAP = 22             # gap between melds / the deadwood group
@@ -52,6 +74,8 @@ class GinRummyRun(GameRun):
         self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
         self.picker = table.SkinPicker(self)
+        self.rules = table.RulesOverlay(self)
+        self.rules_title = INFO.name
 
         self.knock_mode = False
         self.message = "Your turn — draw from the stock or the discard."
@@ -118,9 +142,12 @@ class GinRummyRun(GameRun):
                 self._ai_timer = 0.0
                 self._house_turn()
         mb = pygame.mouse.get_pressed()[0] if pygame.get_init() else False
-        if not self.picker.open and mb and not self._prev_mb:
+        if not self.picker.open and not self.rules.open and mb and not self._prev_mb:
             self._click(inp.aim_x, inp.aim_y)
         self._prev_mb = mb
+
+    def rules_lines(self):
+        return RULES_TEXT
 
     def _house_turn(self):
         from games.rummy.ai import ai_turn
@@ -173,6 +200,13 @@ class GinRummyRun(GameRun):
 
     # ---------------------------------------------------------------- input
     def handle_key(self, key):
+        if key == pygame.K_h:
+            self.picker.open = False
+            self.rules.toggle()
+            return True
+        if self.rules.open:
+            self.rules.handle_key(key)
+            return True
         if self.picker.open:
             self.picker.handle_key(key)
             return True
@@ -351,13 +385,15 @@ class GinRummyRun(GameRun):
             o.text("KNOCK", kx + kw / 2, ky + 10, size=20,
                    color=GOLD if on else TEXT, center=True)
 
-        o.text("Click: draw / discard   K: knock   N: deal   Tab: skins",
+        o.text("Click: draw / discard   K: knock   N: deal   Tab: skins   H: rules",
                W / 2, H - 32, size=13, color=DIM, center=True)
 
         if m.hand_over or m.game_over:
             self._draw_result(o, W, H)
         if self.picker.open:
             self.picker.draw(o)
+        if self.rules.open:
+            self.rules.draw(o, W, H)
 
     def _draw_fan(self, o, cards, y, face_up):
         n = len(cards)
