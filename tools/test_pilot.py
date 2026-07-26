@@ -30,6 +30,11 @@ from games.voxelhell.pilot import (  # noqa: E402
     create_pilot as voxelhell_create_pilot,
     solve_vertical_intercept, enemy_pos_at, _bullet_reach_tau,
 )
+import games.serpent.game as serpentgame  # noqa: E402
+from games.serpent.pilot import (  # noqa: E402
+    create_pilot as serpent_create_pilot, move_is_safe,
+)
+from games.serpent.world import SerpentWorld  # noqa: E402
 from arcade.pilot import create_pilot_for, suppress_for_pilot  # noqa: E402
 from game.entities import Bullet, InputState  # noqa: E402
 
@@ -415,6 +420,82 @@ def test_voxelhell_pilot_determinism():
           f"{len(a)}-frame trace)")
 
 
+# -------------------------------------------------------- serpent: pilot
+def test_serpent_move_is_safe_refuses_trap():
+    """The tail-reachability safety check refuses a cell that's naively free
+    but seals the snake into a dead-end it can't survive — the exact failure
+    a pure "is the next cell empty" check (or a raw flood-fill count) misses."""
+    w = SerpentWorld(rng=random.Random(0))
+    w.body = [(5, 5), (5, 6), (5, 7), (5, 8), (5, 9)]   # head at (5,5)
+    w.direction = "up"
+    w.pending_direction = "up"
+    w.grow = 0
+    w.fruit = None
+    # (4,5) is free but walled into a size-1 dead end; (5,4) escapes upward
+    w.obstacles = {(3, 5), (4, 4), (4, 6)}
+
+    trap = (4, 5)
+    assert trap not in w.body and trap not in w.obstacles      # naively "free"
+    assert not move_is_safe(w, "left"), "safety check walked into a dead end"
+    assert move_is_safe(w, "up"), "safety check refused a genuine escape"
+    print("serpent move_is_safe refuses trap OK "
+          "(naively-free dead-end rejected, escape allowed)")
+
+
+def test_serpent_pilot_survives_and_draws():
+    """The snake reaches a healthy length with zero deaths before it, and it
+    provably interleaves glyph tracing (deliberate non-food movement) along
+    the way — competence plus personality, both verified."""
+    TARGET = 25
+    DT = 1 / 60
+    survivors = 0
+    for seed in (1, 2, 3, 4, 5):
+        run = serpentgame.create_run("arcade", random.Random(seed))
+        pilot = serpent_create_pilot(run)
+        frames = 0
+        reached = False
+        while frames < 60 * 120:
+            inp = pilot.step(run, DT)
+            run.update(DT, inp)
+            run.drain_events()
+            frames += 1
+            if run.world.length >= TARGET:
+                reached = True
+                break
+            assert not run.world.run_over, \
+                (f"seed {seed}: died at length {run.world.length} before "
+                 f"reaching {TARGET}")
+        assert reached, f"seed {seed}: never reached length {TARGET}"
+        assert pilot.glyph_moves > 0, \
+            f"seed {seed}: never traced a glyph waypoint"
+        survivors += 1
+    assert survivors >= 3
+    print(f"serpent pilot survives + draws OK (length>={TARGET}, 0 deaths "
+          f"before it, glyphs interleaved, {survivors} seeds)")
+
+
+def test_serpent_pilot_determinism():
+    def drive(seed):
+        run = serpentgame.create_run("arcade", random.Random(seed))
+        pilot = serpent_create_pilot(run)
+        DT = 1 / 60
+        trace = []
+        for _ in range(2000):
+            inp = pilot.step(run, DT)
+            run.update(DT, inp)
+            run.drain_events()
+            trace.append((run.world.body[0], run.world.length,
+                          pilot.glyph_moves))
+            if run.world.run_over:
+                break
+        return trace
+
+    a, b = drive(3), drive(3)
+    assert a == b
+    print(f"serpent pilot determinism OK (same seed -> identical "
+          f"{len(a)}-step trace)")
+
+
 def main():
     test_pilot_wins_solvable_board()
     test_pilot_determinism()
@@ -430,6 +511,9 @@ def main():
     test_voxelhell_bullet_reach_tau()
     test_voxelhell_never_wastes_a_shot()
     test_voxelhell_pilot_determinism()
+    test_serpent_move_is_safe_refuses_trap()
+    test_serpent_pilot_survives_and_draws()
+    test_serpent_pilot_determinism()
     print("ALL PILOT TESTS PASSED")
 
 

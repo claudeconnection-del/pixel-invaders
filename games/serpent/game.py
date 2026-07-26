@@ -8,6 +8,7 @@ from game.theme import DIM, GOLD, EMBER
 from render.renderer import Batcher
 from render.voxel import quat_axis_angle
 
+from games.serpent.pilot import create_pilot  # noqa: F401 — cabinet opt-in
 from games.serpent.world import SerpentWorld, field_pos, CELL
 
 INFO = GameInfo(

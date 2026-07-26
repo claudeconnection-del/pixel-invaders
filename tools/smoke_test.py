@@ -591,6 +591,32 @@ def main():
     assert app.pilot is None
     print(f"cabinet man (voxel hell) OK (fired {vh_shots}, no settled miss, handback)")
 
+    # Cabinet Man on Serpent: the safety-checked, glyph-tracing snake. Summon,
+    # let it play a good while, confirm it grew, stayed alive, and traced glyphs.
+    app.game_id = "serpent"
+    app.state = game_main.MENU
+    app.start_run("arcade")
+    assert app.pilot is None and app.state == game_main.PLAYING
+    sp = app.run
+    app.gameplay_input = lambda: InputState()
+    app.handle_keydown(pygame.K_F1)              # summon
+    assert app.pilot is not None
+    start_len = sp.world.length
+    for _ in range(60 * 20):                     # ~20s of play
+        app.update_playing(dt)
+        if sp.world.run_over:
+            break
+    render_frame()                               # exercises the snake draw + badge
+    assert sp.pilot_touched
+    assert not sp.world.run_over, "serpent pilot died during the smoke window"
+    assert sp.world.length > start_len, "serpent pilot never grew"
+    glyphs = app.pilot.glyph_moves
+    assert glyphs > 0, "serpent pilot never traced a glyph"
+    app.handle_keydown(pygame.K_UP)              # a real key: instant handback
+    assert app.pilot is None
+    print(f"cabinet man (serpent) OK (grew {start_len}->{sp.world.length}, "
+          f"{glyphs} glyph moves, alive, handback)")
+
     pygame.quit()
     print("SMOKE TEST PASSED")
 

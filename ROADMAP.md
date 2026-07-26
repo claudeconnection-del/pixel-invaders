@@ -88,8 +88,25 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   in Jira): a still-flying-in enemy can very rarely drift into a shot's column in dense late
   waves and eat it (~1 shot per several full games) — closing it needs fly-in prediction,
   deferred. Both pilots' closed-form solvers are cross-checked against brute-force steppers.
-  Smoke drives a live summon→fire→handback on Voxel Hell (the sim-game pilot path). **NEXT
-  (Epic E): E3 Serpent pilot (CAB-34), then E5 attract-mode integration (CAB-36).**
+  Smoke drives a live summon→fire→handback on Voxel Hell (the sim-game pilot path).
+- **Cabinet Man pilot — Serpent (CAB-34): "draws odd symbols, never in danger."** ✅
+  `games/serpent/pilot.py`. Safety is a hard guarantee via *tail reachability* (the check the
+  earlier draft's pure flood-fill was too weak for): after any candidate move it BFS-floods from
+  the new head and only allows the move if the head can still reach its own tail through free
+  cells — the tail always vacates, so a path to it means the snake can follow its own tail
+  forever and never self-trap. Every move (food OR glyph) is gated by this. Priorities: (1)
+  **glyph mode** while comfortable — trace a deterministic direction-sequence glyph from a small
+  library (box/zig-zag/staircase/comb), each step safety-gated, abandoned the instant it'd be
+  unsafe or the board crowds; glyph choice seeded off the run's rng; (2) **food pathing** — BFS
+  shortest safe path to the fruit, first step re-validated by the tail check; (3) **stall/endgame**
+  — follow the tail (guaranteed-empty next cell), which both survives crowded boards and yields a
+  space-filling serpentine, then largest-reachable-area fallback; a genuinely sealed board ends
+  the run (on-brand). Tests in `tools/test_pilot.py`: the near-trap safety case (a naively-free
+  dead-end that a flood-fill count would accept is rejected), survival to length ≥25 with zero
+  deaths before it + glyphs provably interleaved across 5 seeds, determinism. Smoke drives a live
+  serpent summon→grow→handback (528 glyph moves in ~20s). **The Cabinet Man pilot set (Solitaire,
+  Breaker, Voxel Hell, Serpent) is complete. NEXT: E5 attract-mode integration + persona +
+  achievement (CAB-36).**
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
 1. ✅ **Rummy lay-offs onto the knocker's melds (CAB-6).** `apply_layoffs(defender_cards,
