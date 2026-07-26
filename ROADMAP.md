@@ -214,6 +214,15 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   and the footer hint gained "H: rules". Tests: every registered TABLETOP module has non-empty
   `RULES_TEXT` with lines under the length cap (`tools/test_cards.py`, iterating the category);
   smoke toggles it live in Solitaire + Rummy.
+- **Per-game STATS rows (CAB-21).** ✅ Optional module-level `STATS_ROWS = [(label,
+  key_or_callable)]` hook + a pure `arcade.game_api.resolve_stats_rows(rows, life)` resolver
+  (key → lifetime value or 0; callable → formatted, e.g. best-time mm:ss, `$bank`). `main.py`'s
+  STATS screen uses a game's `STATS_ROWS` when present (else the generic runs/kills block).
+  Solitaire (games/wins/streaks/best-time/Vegas bank+deals), Rummy (hands/wins/gins/undercuts/
+  games/streak), Poker (hands/paid/full-houses/best-credits/credits/rebuys), Backgammon (games/
+  wins/gammons/backgammons) — all re-exported from their package `__init__`. Zero-state friendly
+  (`.get`). Tests: resolver + formatters + zero-state in `tools/test_cards.py` and
+  `tools/test_rummy.py`; smoke already renders every game's STATS screen.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

@@ -30,6 +30,7 @@ from game.theme import (
 from game.entities import InputState
 from game.netclient import ArcadeClient
 from arcade.pilot import create_pilot_for, suppress_for_pilot
+from arcade.game_api import resolve_stats_rows
 from arcade import cabinet_man as cabinet_man_mod
 from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
                    load_games)
@@ -1754,21 +1755,26 @@ class App:
         life = self.section["lifetime"]
         o.text(f"{self.game.INFO.name} — SERVICE RECORD", self.W / 2, 70,
                size=32, color=EMBER, center=True)
-        acc = (life["hits"] / life["shots"]) if life["shots"] else 0.0
-        hours = life["playtime"] / 3600
-        rows = [
-            ("Best score", f"{life['best_score']:,}"),
-            ("Best wave", f"{life['best_wave']}" if life["best_wave"] else "-"),
-            ("Runs / wins", f"{life['runs']} / {life['wins']}"),
-            ("Bosses slain", f"{life['bosses']}"),
-            ("Enemies destroyed", f"{life['kills']:,}"),
-            ("Shots fired", f"{life['shots']:,}"),
-            ("Lifetime accuracy", f"{acc:.0%}"),
-            ("Bullets grazed", f"{life['grazes']:,}"),
-            ("Power-ups collected", f"{life['powerups']:,}"),
-            ("Times shot down", f"{life['deaths']}"),
-            ("Time in the chair", f"{hours:.1f}h"),
-        ]
+        stats_rows = getattr(self.game, "STATS_ROWS", None)
+        if stats_rows is not None:
+            # game-specific lifetime rows (tabletop games have no runs/kills)
+            rows = resolve_stats_rows(stats_rows, life)
+        else:
+            acc = (life["hits"] / life["shots"]) if life["shots"] else 0.0
+            hours = life["playtime"] / 3600
+            rows = [
+                ("Best score", f"{life['best_score']:,}"),
+                ("Best wave", f"{life['best_wave']}" if life["best_wave"] else "-"),
+                ("Runs / wins", f"{life['runs']} / {life['wins']}"),
+                ("Bosses slain", f"{life['bosses']}"),
+                ("Enemies destroyed", f"{life['kills']:,}"),
+                ("Shots fired", f"{life['shots']:,}"),
+                ("Lifetime accuracy", f"{acc:.0%}"),
+                ("Bullets grazed", f"{life['grazes']:,}"),
+                ("Power-ups collected", f"{life['powerups']:,}"),
+                ("Times shot down", f"{life['deaths']}"),
+                ("Time in the chair", f"{hours:.1f}h"),
+            ]
         for i, (label, value) in enumerate(rows):
             y = 160 + i * 46
             o.text(label, self.W / 2 - 280, y, size=20, color=DIM)

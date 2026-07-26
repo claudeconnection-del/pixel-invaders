@@ -172,6 +172,32 @@ def test_collect_and_win():
     print("collect + win OK")
 
 
+def test_tabletop_stats_rows():
+    from arcade.game_api import resolve_stats_rows
+    from games import games_in_category, load_games
+    games = load_games()
+    # every TABLETOP game has STATS_ROWS, and they resolve from a fresh (empty)
+    # lifetime dict with no KeyError (zero-state friendly)
+    for gid in games_in_category("TABLETOP"):
+        rows = getattr(games[gid], "STATS_ROWS", None)
+        assert rows, f"{gid} has no STATS_ROWS"
+        resolved = resolve_stats_rows(rows, {})     # empty lifetime
+        assert len(resolved) == len(rows)
+        assert all(isinstance(v, str) for _, v in resolved)
+
+    # solitaire rows resolve real values (incl. the best-time formatter + $bank)
+    import games.solitaire as sol
+    life = {"sol_games": 12, "sol_wins": 4, "sol_best_streak": 3,
+            "sol_streak": 1, "sol_best_time": 125, "sol_vegas_bank": -17,
+            "sol_vegas_deals": 5}
+    got = dict(resolve_stats_rows(sol.STATS_ROWS, life))
+    assert got["Games played"] == "12" and got["Wins"] == "4"
+    assert got["Best time"] == "2:05"          # mm:ss formatter
+    assert got["Vegas bankroll"] == "$-17"
+    print(f"tabletop stats rows OK ({len(games_in_category('TABLETOP'))} games, "
+          "resolver + formatters)")
+
+
 def test_tabletop_rules_text():
     """Every registered TABLETOP game exports a non-empty RULES_TEXT with
     lines under the render length cap."""
@@ -303,6 +329,7 @@ def main():
     test_stock_draw_recycle()
     test_move_rules_and_undo()
     test_collect_and_win()
+    test_tabletop_stats_rows()
     test_tabletop_rules_text()
     test_vegas_rules()
     test_vegas_achievements()

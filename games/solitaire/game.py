@@ -38,6 +38,21 @@ VEGAS_BUYIN = 52          # classic Vegas: -$52 per deal
 # Classic arcade Vegas: draw-3 with 3 stock passes.
 _VEGAS_DRAW, _VEGAS_PASSES = 3, 3
 
+def _mmss(sec):
+    sec = int(sec or 0)
+    return f"{sec // 60}:{sec % 60:02d}" if sec else "-"
+
+
+STATS_ROWS = [
+    ("Games played", "sol_games"),
+    ("Wins", "sol_wins"),
+    ("Best streak", "sol_best_streak"),
+    ("Current streak", "sol_streak"),
+    ("Best time", lambda life: _mmss(life.get("sol_best_time"))),
+    ("Vegas bankroll", lambda life: f"${life.get('sol_vegas_bank', 0)}"),
+    ("Vegas deals", "sol_vegas_deals"),
+]
+
 RULES_TEXT = [
     "OBJECTIVE",
     "Build all four foundations up from Ace to King, one per suit.",

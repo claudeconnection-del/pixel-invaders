@@ -28,6 +28,15 @@ ACHIEVEMENTS = _POKER_ACHIEVEMENTS
 _GRIND_KEYS = ("vp_credits", "vp_rebuys", "vp_hands", "vp_paid",
                "vp_full_houses", "vp_best_credits")
 
+STATS_ROWS = [
+    ("Hands played", "vp_hands"),
+    ("Paying hands", "vp_paid"),
+    ("Full houses", "vp_full_houses"),
+    ("Best credits", "vp_best_credits"),
+    ("Credits", "vp_credits"),
+    ("Rebuys", "vp_rebuys"),
+]
+
 RULES_TEXT = [
     "OBJECTIVE",
     "Draw a paying poker hand — Jacks or Better pays out.",

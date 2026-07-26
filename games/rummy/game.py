@@ -30,6 +30,15 @@ ACHIEVEMENTS = _RUMMY_ACHIEVEMENTS
 _GRIND_KEYS = ("rm_hands", "rm_hand_wins", "rm_gins", "rm_undercuts",
                "rm_game_wins", "rm_streak", "rm_best_streak")
 
+STATS_ROWS = [
+    ("Hands played", "rm_hands"),
+    ("Hands won", "rm_hand_wins"),
+    ("Gins", "rm_gins"),
+    ("Undercuts", "rm_undercuts"),
+    ("Games won", "rm_game_wins"),
+    ("Best streak", "rm_best_streak"),
+]
+
 RULES_TEXT = [
     "OBJECTIVE",
     "Form your 10-card hand into melds and knock with low deadwood.",

@@ -33,6 +33,13 @@ INFO = GameInfo(
 ACHIEVEMENTS = _BG_ACHIEVEMENTS
 _GRIND_KEYS = ("bg_games", "bg_wins", "bg_gammons", "bg_backgammons")
 
+STATS_ROWS = [
+    ("Games played", "bg_games"),
+    ("Wins", "bg_wins"),
+    ("Gammons", "bg_gammons"),
+    ("Backgammons", "bg_backgammons"),
+]
+
 RULES_TEXT = [
     "OBJECTIVE",
     "Bring all 15 of your checkers home, then bear them all off first.",

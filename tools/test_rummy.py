@@ -212,6 +212,20 @@ def test_rummy_wiring():
     print("gin rummy wiring OK (achievements + grind counters + cosmetic sync)")
 
 
+def test_rummy_stats_rows():
+    import games.rummy as rummy
+    from arcade.game_api import resolve_stats_rows
+    life = {"rm_hands": 40, "rm_hand_wins": 18, "rm_gins": 5,
+            "rm_undercuts": 2, "rm_game_wins": 3, "rm_best_streak": 6}
+    got = dict(resolve_stats_rows(rummy.STATS_ROWS, life))
+    assert got["Hands played"] == "40" and got["Hands won"] == "18"
+    assert got["Gins"] == "5" and got["Games won"] == "3"
+    # zero-state: fresh lifetime resolves without KeyError
+    zero = dict(resolve_stats_rows(rummy.STATS_ROWS, {}))
+    assert zero["Hands played"] == "0"
+    print("rummy stats rows OK (resolver + zero-state)")
+
+
 def main():
     test_meld_engine()
     test_scoring()
@@ -223,6 +237,7 @@ def main():
     test_ai_game()
     test_rummy_achievements()
     test_rummy_wiring()
+    test_rummy_stats_rows()
     print("ALL RUMMY TESTS PASSED")
 
 
