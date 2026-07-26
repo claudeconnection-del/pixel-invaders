@@ -85,14 +85,17 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
    "laid off N card(s)" line when present. Tests in `tools/test_rummy.py`: run extension,
    set 4th-card, chained extension, no-layoff-on-gin, an undercut created only by a
    layoff. **Rummy is now feature-complete** (achievements/cosmetics from CAB-5 + this).
-2. **Poker** — ✅ **Video poker headless core done** (CAB-7): `games/poker/model.py` (+
-   `games/poker/__init__.py`) — `evaluate()` hand classifier (royal_flush .. nothing, ace
-   high/low incl. the wheel straight), full-pay 9/6 Jacks-or-Better `PAYTABLE` with the
-   max-bet (5-coin) royal jackpot (4000, not 250×5), `VideoPoker` (bet/deal/toggle_hold/draw,
-   credits ledger), deterministic from the rng. `tools/test_poker.py` green (evaluator
-   truth-table, payout math, deal/draw determinism, credits ledger, 10k-hand rng sweep RTP
-   smoke-check). **NEXT: cabinet view** `games/poker/game.py` (hold/draw table, register
-   TABLETOP, CAB-8), then achievements (CAB-9).
+2. **Poker** — ✅ **playable** (CAB-7 headless core + CAB-8 table). `games/poker/model.py`:
+   `evaluate()` hand classifier (royal_flush .. nothing, ace high/low incl. the wheel
+   straight), full-pay 9/6 Jacks-or-Better `PAYTABLE` with the max-bet (5-coin) royal jackpot
+   (4000, not 250×5), `VideoPoker` (bet/deal/toggle_hold/draw, credits ledger), deterministic
+   from the rng. `games/poker/game.py` (`VideoPokerRun`, TABLETOP category, registered after
+   "rummy"): 5-card hand centered, left-side paytable panel highlighting the winning row,
+   bet controls (Left/Right, M for max), hold via click or keys 1-5, D deals/draws, R rebuys
+   200 credits when tapped out (`vp_credits`/`vp_rebuys` persisted in `section["lifetime"]`);
+   reuses `cards/table` felt+picker exactly like rummy. Tests: `tools/test_poker.py` (rules,
+   green already), `tools/smoke_test.py` poker block (bet/deal/hold/draw/rebuy live).
+   **NEXT: achievements** (CAB-9).
 3. **Backgammon** — ✅ **headless core done** (CAB-10): `games/backgammon/model.py`
    (signed `points[24]` + bar/off, pip_count, dice via the run's rng with doubles = four
    moves, `legal_moves`/`apply` honouring bar-first entry, blocking, hitting, exact/overshoot

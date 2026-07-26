@@ -456,6 +456,37 @@ def main():
     print(f"gin rummy OK (hand_over={rr.model.hand_over}, "
           f"scores={rr.model.scores})")
 
+    # video poker (TABLETOP): deal, toggle a hold, draw, exercise the bet
+    # controls + rebuy path, and the table/paytable render.
+    import games.poker.game as poker_game
+    app.game_id = "poker"
+    app.state = game_main.MENU
+    app.start_run("jacks")
+    assert app.state == game_main.PLAYING
+    pr = app.run
+    app.gameplay_input = lambda: InputState()
+    credits0 = pr.model.credits
+    app.handle_keydown(pygame.K_RIGHT)          # bet 1 -> 2
+    assert pr.model.bet == 2
+    app.handle_keydown(pygame.K_d)               # deal
+    assert pr.model.phase == "hold" and pr.model.credits == credits0 - 2
+    render_frame()                               # exercises hand + paytable draw
+    app.handle_keydown(pygame.K_1)                # hold card 0
+    assert pr.model.held[0]
+    app.handle_keydown(pygame.K_d)                # draw
+    assert pr.model.phase == "paid" and pr.model.last_result is not None
+    render_frame()                                # winning-row highlight (if any)
+    pr.model.credits = 0                          # force the rebuy path
+    app.handle_keydown(pygame.K_r)
+    assert pr.model.credits == poker_game.REBUY_AMOUNT
+    poker_sec = profile_mod.game_section(app.profile, "poker")
+    assert poker_sec["lifetime"]["vp_rebuys"] >= 1
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print(f"video poker OK (bet={pr.model.bet}, last={pr.model.last_result[0]}, "
+          f"rebuys={poker_sec['lifetime']['vp_rebuys']})")
+
     # Cabinet Man: F1 summons the house pilot on an opted-in game (Solitaire),
     # it plays a few moves on its own, then any real input instantly hands
     # back the seat — exercising summon -> pilot moves -> handback live.

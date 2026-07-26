@@ -5,7 +5,7 @@ CATEGORIES = [
     ("CLASSICS +", ["voxelhell", "breaker", "serpent", "studio"]),
     ("FPS", ["voxeldoom", "crisis", "aimtrainer"]),
     ("BOARD", ["battleship"]),
-    ("TABLETOP", ["solitaire", "rummy"]),
+    ("TABLETOP", ["solitaire", "rummy", "poker"]),
 ]
 
 GAME_IDS = [gid for _, ids in CATEGORIES for gid in ids]
