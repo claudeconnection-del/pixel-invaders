@@ -293,6 +293,32 @@ def main():
     assert app.state == game_main.MENU
     print("attract mode OK")
 
+    # Cabinet Man attract star: forcing the setting makes a live pilot star the
+    # idle cycle (persona caption on), and it stays a throwaway — no profile
+    # writes while a pilot demo plays (E1 integrity in attract).
+    import copy as _copy
+    app.profile["settings"]["attract_star"] = "cabinet_man"
+    app.profile["settings"]["cabinet_man"] = True
+    starred_pilot = False
+    for _ in range(8):                       # cycle until a pilot-eligible game stars
+        app.start_attract()
+        if app.attract_is_pilot:
+            starred_pilot = True
+            break
+    assert starred_pilot, "cabinet_man attract star never fielded a live pilot"
+    assert app.attract_pilot is not None
+    profile_before = _copy.deepcopy(app.profile)
+    for _ in range(180):                     # ~3s of live pilot attract play
+        app.update_attract(dt)
+        render_frame()
+        if app.state != game_main.ATTRACT:
+            break
+    assert app.profile == profile_before, "attract pilot wrote to the profile"
+    app.handle_keydown(pygame.K_SPACE)
+    assert app.state == game_main.MENU
+    print(f"cabinet man attract star OK (pilot starred {app.attract_gid}, "
+          f"no profile writes)")
+
     # ambient mode: manual entry (F2), draw the scene + overlay, any-key exit;
     # then the idle-screen routing that fades a quiet menu into ambient
     app.game_id = "voxelhell"

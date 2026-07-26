@@ -36,6 +36,7 @@ from games.serpent.pilot import (  # noqa: E402
 )
 from games.serpent.world import SerpentWorld  # noqa: E402
 from arcade.pilot import create_pilot_for, suppress_for_pilot  # noqa: E402
+from arcade import cabinet_man as cm  # noqa: E402
 from game.entities import Bullet, InputState  # noqa: E402
 
 
@@ -496,6 +497,87 @@ def test_serpent_pilot_determinism():
           f"{len(a)}-step trace)")
 
 
+# ------------------------------------------------- cabinet man: attract/persona
+def test_attract_star_selection():
+    """Which attract cycles a live pilot stars, given the setting + available
+    opted-in pilots + the cycle counter."""
+    two = ["voxelhell", "serpent"]
+    one = ["voxelhell"]
+    none = []
+
+    # replays: never a pilot, regardless of how many pilots exist
+    assert not cm.attract_star_is_pilot("replays", two, 0)
+    assert not cm.attract_star_is_pilot("replays", two, 1)
+
+    # cabinet_man: always a pilot when any exist, never when none
+    assert cm.attract_star_is_pilot("cabinet_man", two, 0)
+    assert cm.attract_star_is_pilot("cabinet_man", one, 3)
+    assert not cm.attract_star_is_pilot("cabinet_man", none, 0)
+
+    # mixed: alternating, but only once >= MIXED_MIN_PILOTS exist
+    assert not cm.attract_star_is_pilot("mixed", two, 0)   # even cycle: canned
+    assert cm.attract_star_is_pilot("mixed", two, 1)       # odd cycle: pilot
+    assert not cm.attract_star_is_pilot("mixed", one, 1)   # too few pilots
+    assert not cm.attract_star_is_pilot("mixed", none, 1)
+
+    # pilot rotation cycles through the opted-in games deterministically
+    assert cm.pick_pilot_gid(two, 0) == "voxelhell"
+    assert cm.pick_pilot_gid(two, 1) == "serpent"
+    assert cm.pick_pilot_gid(two, 2) == "voxelhell"
+    assert cm.pick_pilot_gid(none, 0) is None
+    print("cabinet man attract-star selection OK "
+          "(replays/cabinet_man/mixed + pilot rotation)")
+
+
+def test_takeover_banner_rotation():
+    n = len(cm.TAKEOVER_BANNERS)
+    assert cm.takeover_banner(1) == cm.TAKEOVER_BANNERS[0]
+    assert cm.takeover_banner(2) == cm.TAKEOVER_BANNERS[1]
+    assert cm.takeover_banner(n + 1) == cm.TAKEOVER_BANNERS[0]   # wraps
+    # deterministic + always a non-empty string
+    assert all(isinstance(cm.takeover_banner(i), str) and cm.takeover_banner(i)
+               for i in range(1, 12))
+    print(f"cabinet man takeover-banner rotation OK ({n} variants)")
+
+
+def test_cabinet_man_achievements():
+    # ghost_in_the_machine: 60+ unbroken watch seconds
+    prof = {}
+    got = {a[0] for a in cm.evaluate_cabinet_man(prof, {"watch_seconds": 60})}
+    assert "ghost_in_the_machine" in got
+    # idempotent: already unlocked -> not returned again
+    again = cm.evaluate_cabinet_man(prof, {"watch_seconds": 120})
+    assert not any(a[0] == "ghost_in_the_machine" for a in again)
+    # not yet earned under threshold
+    prof2 = {}
+    assert not cm.evaluate_cabinet_man(prof2, {"watch_seconds": 59})
+
+    # tag_team: beat the session best after handing back control
+    prof3 = {}
+    got3 = {a[0] for a in cm.evaluate_cabinet_man(
+        prof3, {"beat_session_best_after_handback": True})}
+    assert "tag_team" in got3
+    prof4 = {}
+    assert not cm.evaluate_cabinet_man(
+        prof4, {"beat_session_best_after_handback": False})
+
+    # the section accessor backfills tolerantly
+    section = cm.cabinet_man_section({})
+    assert "achievements" in section and "counters" in section
+    print("cabinet man achievements OK "
+          "(ghost_in_the_machine + tag_team predicates + section backfill)")
+
+
+def test_cabinet_man_pilot_game_ids():
+    """The opted-in pilot games are discovered from the registry (create_pilot
+    export) — Solitaire, Breaker, Voxel Hell, and Serpent all opt in now."""
+    from games import load_games
+    games = load_games()
+    pilots = cm.pilot_game_ids(games)
+    assert {"solitaire", "breaker", "voxelhell", "serpent"} <= set(pilots)
+    print(f"cabinet man pilot discovery OK ({len(pilots)} opted-in: {pilots})")
+
+
 def main():
     test_pilot_wins_solvable_board()
     test_pilot_determinism()
@@ -514,6 +596,10 @@ def main():
     test_serpent_move_is_safe_refuses_trap()
     test_serpent_pilot_survives_and_draws()
     test_serpent_pilot_determinism()
+    test_attract_star_selection()
+    test_takeover_banner_rotation()
+    test_cabinet_man_achievements()
+    test_cabinet_man_pilot_game_ids()
     print("ALL PILOT TESTS PASSED")
 
 

@@ -104,9 +104,26 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   the run (on-brand). Tests in `tools/test_pilot.py`: the near-trap safety case (a naively-free
   dead-end that a flood-fill count would accept is rejected), survival to length ≥25 with zero
   deaths before it + glyphs provably interleaved across 5 seeds, determinism. Smoke drives a live
-  serpent summon→grow→handback (528 glyph moves in ~20s). **The Cabinet Man pilot set (Solitaire,
-  Breaker, Voxel Hell, Serpent) is complete. NEXT: E5 attract-mode integration + persona +
-  achievement (CAB-36).**
+  serpent summon→grow→handback (528 glyph moves in ~20s).
+- **Cabinet Man attract star + persona + achievements (CAB-36, Epic E5) — Epic E COMPLETE 🎉.**
+  ✅ `arcade/cabinet_man.py` (pure/headless): `attract_star_is_pilot(setting, pilot_gids, cycle)`
+  resolves who headlines an idle attract cycle — `replays` (canned demo bot, historical),
+  `cabinet_man` (always a live pilot), or `mixed` (alternate, default once ≥2 pilots exist), all
+  degrading to canned when no games have opted in; `pick_pilot_gid` rotates through the opted-in
+  pilots. Wired into `main.py` `start_attract`/`update_attract`: a starred cycle creates a real
+  pilot and drives the throwaway attract run with it (no profile writes — smoke asserts profile
+  equality before/after), with a GOLD persona caption ("CABINET MAN is playing — press any
+  button"). Persona: deterministic takeover-banner rotation (`takeover_banner(n)` — 4 variants,
+  restraint over cringe). Cabinet-level achievements in a new `profile["cabinet_man"]` space
+  (mirrors the ambient mood set): `ghost_in_the_machine` (watch a summoned pilot 60+ unbroken
+  seconds — tracked via `pilot_watch`) and `tag_team` (take back the controls and then beat your
+  *session best* — `session_best` records only your own clean runs, so it's always your doing;
+  respects E1's no-pilot-scoring rule). New SETTINGS rows: "Cabinet Man" master on/off (default
+  on; F1 + attract-star both honor it) and "Attract star". Tests: attract-star selection +
+  banner rotation + achievement predicates + pilot discovery in `tools/test_pilot.py`; smoke
+  fields a live `cabinet_man`-starred attract cycle and asserts zero profile writes.
+  **Epic E (Cabinet Man Mode) is done end to end: framework + Solitaire/Breaker/Voxel Hell/Serpent
+  pilots + attract integration + persona + achievements.**
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
 1. ✅ **Rummy lay-offs onto the knocker's melds (CAB-6).** `apply_layoffs(defender_cards,

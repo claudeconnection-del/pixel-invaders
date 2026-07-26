@@ -30,13 +30,14 @@ from game.theme import (
 from game.entities import InputState
 from game.netclient import ArcadeClient
 from arcade.pilot import create_pilot_for, suppress_for_pilot
+from arcade import cabinet_man as cabinet_man_mod
 from games import (CATEGORIES, GAME_IDS, category_of, games_in_category,
                    load_games)
 from meta import ghost as ghost_mod
 from meta import leaderboard as lb
 from meta import profile as profile_mod
 from meta import replay as replay_mod
-from meta.achievements import AchievementEngine, evaluate_ambient
+from meta.achievements import Achievement, AchievementEngine, evaluate_ambient
 from meta.outbox import Outbox
 from meta.stats import StatsTracker
 
@@ -102,6 +103,8 @@ SETTINGS_ROWS = [
     ("Ghost rival", "ghost", ["off", "personal"]),
     ("Game music", "game_music", ["classic", "custom"]),
     ("Idle screen", "idle_screen", ["attract", "ambient", "off"]),
+    ("Cabinet Man", "cabinet_man", [True, False]),
+    ("Attract star", "attract_star", ["replays", "cabinet_man", "mixed"]),
     ("Ambient mode", "ambient_mode", AMBIENT_FREE_IDS),
     ("Ambient sound", "ambient_sound", ["preset", "silence"]),
     ("Music volume", "music_vol", "float"),
@@ -191,12 +194,18 @@ class App:
 
         # Cabinet Man: the summonable house player (F1 while PLAYING)
         self.pilot = None
+        self.pilot_watch = 0.0        # unbroken seconds watching the current summon
+        self.session_best = {}        # game_id -> best own-hands score this session
+        self.tag_team_armed = False   # a pilot drove this run, then handed back
 
         # arcade presentation
         self.idle_timer = 0.0
         self.attract_index = -1
+        self.attract_cycle = 0        # monotonic attract-cycle counter (star pick)
         self.attract_run = None
         self.attract_gid = None
+        self.attract_pilot = None     # live Cabinet Man pilot starring this cycle
+        self.attract_is_pilot = False
 
         # global leaderboard (offline-safe)
         self.net = ArcadeClient(self.profile["settings"].get("server_url", ""))
@@ -279,21 +288,64 @@ class App:
     # -------------------------------------------------------- Cabinet Man
     def _toggle_pilot(self):
         """F1 while PLAYING: summon Cabinet Man, or hand back if already at
-        the controls."""
+        the controls. A no-op if the master toggle is off."""
+        if not self.profile["settings"].get("cabinet_man", True):
+            return
         if self.pilot is not None:
             self._handback_pilot()
             return
         self.pilot = create_pilot_for(self.game, self.run)
         if self.pilot is None:
             return          # this game hasn't opted in — no-op
-        self.post_banner("CABINET MAN AT THE CONTROLS", 2.0)
+        cm = cabinet_man_mod.cabinet_man_section(self.profile)
+        cm["counters"]["summons"] += 1
+        self.pilot_watch = 0.0
+        self.post_banner(cabinet_man_mod.takeover_banner(cm["counters"]["summons"]),
+                         2.0)
         self.audio.play("menu_select")
+        self.save_profile()
 
     def _handback_pilot(self):
         if self.pilot is None:
             return
         self.pilot = None
-        self.post_banner("…all yours", 1.5)
+        # once a pilot has driven any part of a run, taking back control arms
+        # the "tag_team" achievement: beating your session best from here is
+        # all your own doing (the pilot's score never counts — E1 integrity).
+        self.tag_team_armed = True
+        self.pilot_watch = 0.0
+        self.post_banner(cabinet_man_mod.HANDBACK_BANNER, 1.5)
+
+    def _check_cabinet_man_achievements(self, **extra):
+        """Evaluate Cabinet Man's cabinet-level achievements against live
+        context; toast + persist any new unlock. Cheap (2 predicates), safe
+        per-frame since only an actual unlock writes the profile."""
+        cm = cabinet_man_mod.cabinet_man_section(self.profile)
+        cm["counters"]["longest_watch"] = max(
+            cm["counters"].get("longest_watch", 0.0), self.pilot_watch)
+        context = {"watch_seconds": self.pilot_watch}
+        context.update(extra)
+        for aid, name, desc in cabinet_man_mod.evaluate_cabinet_man(
+                self.profile, context):
+            self.toasts.append([Achievement(aid, name, desc, lambda *a: False),
+                                3.5])
+            self.audio.play("toast")
+            self.save_profile()
+
+    def _track_tag_team(self, run):
+        """After a pilot has driven a run and the human took back over, unlock
+        `tag_team` if the player's own score now beats their session best for
+        this game. Pilot-driven score never counts (suppress_for_pilot gates
+        it), so this is always the human's own doing."""
+        if not self.tag_team_armed or self.pilot is not None:
+            return
+        if suppress_for_pilot(run):
+            return          # still a pilot-tainted moment; wait for clean play
+        score = int(getattr(run, "score", 0))
+        best = self.session_best.get(self.game_id, 0)
+        if score > best and best > 0:
+            self._check_cabinet_man_achievements(
+                beat_session_best_after_handback=True)
 
     @staticmethod
     def _pilot_real_input(inp):
@@ -1064,17 +1116,36 @@ class App:
         eligible = [g for g in GAME_IDS if self.games[g].INFO.attract]
         if not eligible:
             return
-        self.attract_index = (self.attract_index + 1) % len(eligible)
-        gid = eligible[self.attract_index]
+        self.attract_cycle += 1
+        settings = self.profile["settings"]
+        # a live Cabinet Man run can star this cycle instead of the canned demo
+        # bot — gated by the master toggle, the attract-star setting, and which
+        # attract-eligible games have opted in (export create_pilot).
+        pilot_gids = [g for g in cabinet_man_mod.pilot_game_ids(self.games)
+                      if self.games[g].INFO.attract]
+        use_pilot = (settings.get("cabinet_man", True)
+                     and cabinet_man_mod.attract_star_is_pilot(
+                         settings.get("attract_star", "mixed"), pilot_gids,
+                         self.attract_cycle))
+        if use_pilot:
+            gid = cabinet_man_mod.pick_pilot_gid(pilot_gids, self.attract_cycle)
+        else:
+            self.attract_index = (self.attract_index + 1) % len(eligible)
+            gid = eligible[self.attract_index]
         self.attract_gid = gid
         self.attract_run = self.games[gid].create_run(
             self.games[gid].INFO.modes[0][0], random.Random())
+        self.attract_pilot = (create_pilot_for(self.games[gid], self.attract_run)
+                              if use_pilot else None)
+        self.attract_is_pilot = self.attract_pilot is not None
         self.state = ATTRACT
         self.wave_banner = None
         self.audio.music(None)
 
     def stop_attract(self):
         self.attract_run = None
+        self.attract_pilot = None
+        self.attract_is_pilot = False
         self.idle_timer = 0.0
         self.state = MENU
         self.audio.music("menu")
@@ -1083,7 +1154,16 @@ class App:
     def update_attract(self, dt):
         run = self.attract_run
         module = self.games[self.attract_gid]
-        run.update(dt, module.demo_bot(run.world))
+        # a Cabinet Man attract run is a throwaway showcase: the pilot drives,
+        # but (like every attract demo) it never touches stats/achievements/
+        # profile — only effects are played. The E1 suppression flag is set on
+        # the run for good measure, though attract never feeds the engine.
+        if self.attract_is_pilot and self.attract_pilot is not None:
+            pilot_inp = self.attract_pilot.step(run, dt)
+            run.update(dt, pilot_inp if pilot_inp is not None else InputState())
+            run.pilot_touched = True
+        else:
+            run.update(dt, module.demo_bot(run.world))
         # effects only — attract demos never touch stats or achievements
         for etype, data in run.drain_events():
             run.on_event(etype, data, self.renderer, self.audio, self.post_banner)
@@ -1397,7 +1477,10 @@ class App:
                 if pilot_inp is not None:
                     inp = pilot_inp
                 run.pilot_touched = True
+                self.pilot_watch += dt
+                self._check_cabinet_man_achievements()
         run.update(dt, inp)
+        self._track_tag_team(run)
         self.run_elapsed += dt
         if self.replay_rec is not None:
             self.replay_rec.on_frame(dt, inp)
@@ -1471,6 +1554,11 @@ class App:
                 if "wave_reached" in self.run_summary:
                     extra["wave"] = self.run_summary["wave_reached"]
                 self.pending_board = (self.game_id, self.run_mode, score, extra)
+            # session best (Cabinet Man's "tag_team"): only the player's own
+            # clean runs set the bar, so beating it later is always their doing.
+            if not pilot_touched:
+                self.session_best[self.game_id] = max(
+                    self.session_best.get(self.game_id, 0), score)
             self.save_profile()
 
     def draw_ghost_pace(self, o):
@@ -2013,8 +2101,14 @@ class App:
         if math.sin(self.renderer.time * 3) > -0.2:
             o.text("PRESS ANY KEY", self.W / 2, self.H * 0.62, size=36,
                    color=TEXT, center=True)
-        o.text(f"DEMO — {module.INFO.name}", self.W / 2, self.H - 44, size=16,
-               color=DIM, center=True)
+        if self.attract_is_pilot:
+            # persona caption: Cabinet Man is starring this idle cycle
+            pulse = int(180 + 60 * abs(math.sin(self.renderer.time * 2.5)))
+            o.text(cabinet_man_mod.ATTRACT_CAPTION, self.W / 2, self.H - 44,
+                   size=16, color=(255, 200, 60, pulse), center=True)
+        else:
+            o.text(f"DEMO — {module.INFO.name}", self.W / 2, self.H - 44,
+                   size=16, color=DIM, center=True)
 
     def draw_fps(self):
         o = self.renderer.overlay

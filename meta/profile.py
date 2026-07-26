@@ -51,6 +51,8 @@ DEFAULT_PROFILE = {
         "ghost": "personal",      # off | personal (race your best run's ghost)
         "game_music": "classic",  # classic | custom (Voxel Studio export)
         "idle_screen": "attract",  # attract | ambient | off (menu idle behaviour)
+        "attract_star": "mixed",   # replays | cabinet_man | mixed (who stars attract)
+        "cabinet_man": True,       # master toggle for the summonable house player
         "ambient_mode": "embers",  # default ambient preset id (built-in)
         "ambient_sound": "preset",  # preset | silence (global ambient sound override)
         # tabletop cosmetics — shared across the solo card/tabletop games
@@ -62,6 +64,12 @@ DEFAULT_PROFILE = {
         },
         "player_name": "AAA",  # arcade initials
         "server_url": "",      # arcade backend, e.g. http://ubuntu-box:8083
+    },
+    # Cabinet Man: cabinet-level achievement unlocks + counters (summons,
+    # longest unbroken watch) — backfilled by arcade.cabinet_man.cabinet_man_section
+    "cabinet_man": {
+        "achievements": {},        # id -> {"unlocked_at": iso8601}
+        "counters": {"summons": 0, "longest_watch": 0.0},
     },
     # ambient mode: last-used preset, custom save slots, mood counters, and the
     # cabinet-level (mood) achievement unlocks
@@ -145,7 +153,7 @@ def load(path=None):
         return profile
 
     for key, value in saved.items():
-        if key in ("settings", "leaderboard", "games", "ambient") \
+        if key in ("settings", "leaderboard", "games", "ambient", "cabinet_man") \
                 and isinstance(value, dict):
             profile[key].update(value)
         elif key in profile:
