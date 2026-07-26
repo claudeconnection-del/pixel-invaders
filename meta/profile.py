@@ -6,9 +6,13 @@ top level; per-game progress under games.<game_id>.
 import copy
 import json
 import os
+import shutil
 import tempfile
+from datetime import datetime
 
 SCHEMA_VERSION = 2
+
+EXPORT_NAME = "cabinet_profile_export.json"
 
 GAME_SECTION_DEFAULT = {
     "selected_skin": "vanguard",
@@ -133,16 +137,11 @@ def _migrate_v1(saved, profile):
         profile["leaderboard"].update(saved["leaderboard"])
 
 
-def load(path=None):
-    """Load the profile, merging defaults for any missing keys so old save
-    files keep working as the schema grows."""
-    path = path or default_path()
+def _from_saved(saved):
+    """Build a full profile from a parsed saved dict: migrate old versions and
+    backfill every missing default. The single merge path shared by load() and
+    import_profile()."""
     profile = copy.deepcopy(DEFAULT_PROFILE)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            saved = json.load(f)
-    except (OSError, ValueError):
-        return profile
     if not isinstance(saved, dict):
         return profile
 
@@ -162,6 +161,18 @@ def load(path=None):
     return profile
 
 
+def load(path=None):
+    """Load the profile, merging defaults for any missing keys so old save
+    files keep working as the schema grows."""
+    path = path or default_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return copy.deepcopy(DEFAULT_PROFILE)
+    return _from_saved(saved)
+
+
 def save(profile, path=None):
     """Atomic write: temp file in the same directory, then os.replace, so a
     crash mid-write can never corrupt the existing save."""
@@ -174,3 +185,55 @@ def save(profile, path=None):
         os.replace(tmp_path, path)
     except OSError:
         pass  # saving is best-effort; never crash the game over it
+
+
+# --------------------------------------------------- export / import (CAB-27)
+def export_path():
+    """The fixed cabinet export filename, beside the profile (no file dialog —
+    a fixed path keeps migration cabinet-simple)."""
+    return os.path.join(os.path.dirname(default_path()), EXPORT_NAME)
+
+
+def export_profile(profile, path=None):
+    """Pretty-dump the profile (schema version included) to `path` (defaults to
+    the fixed export file). Returns the path on success, None on failure."""
+    path = path or export_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(profile, f, indent=2)
+        return path
+    except OSError:
+        return None
+
+
+def import_profile(path=None):
+    """Parse an exported profile file and backfill it to the current schema
+    (via the same merge as load()). Returns the profile dict, or None if the
+    file is missing or corrupt — so the caller can leave the current profile
+    untouched. An older-version or minimal export upgrades cleanly."""
+    path = path or export_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return None                 # missing or corrupt: signal failure
+    if not isinstance(saved, dict):
+        return None
+    return _from_saved(saved)
+
+
+def backup_profile(path=None):
+    """Copy the current profile file to a timestamped sibling before an import
+    replaces it. Returns the backup path, or None if there was nothing to back
+    up (fresh cabinet) or the copy failed."""
+    path = path or default_path()
+    if not os.path.exists(path):
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = os.path.join(os.path.dirname(path) or ".",
+                          f"profile.backup-{stamp}.json")
+    try:
+        shutil.copy2(path, backup)
+        return backup
+    except OSError:
+        return None

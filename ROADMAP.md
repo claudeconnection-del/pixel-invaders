@@ -223,6 +223,16 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   wins/gammons/backgammons) — all re-exported from their package `__init__`. Zero-state friendly
   (`.get`). Tests: resolver + formatters + zero-state in `tools/test_cards.py` and
   `tools/test_rummy.py`; smoke already renders every game's STATS screen.
+- **Profile export / import with backup (CAB-27).** ✅ `meta/profile.py`: `export_profile()`
+  pretty-dumps to a fixed `cabinet_profile_export.json` beside the profile; `import_profile()`
+  parses it and routes through the shared `_from_saved()` merge (factored out of `load()`) so an
+  older/minimal export backfills to the current schema — returns None on a missing/corrupt file so
+  the caller keeps the current profile; `backup_profile()` copies the live profile to a timestamped
+  `profile.backup-*.json` before a swap. `main.py` SETTINGS gained "Export profile" / "Import
+  profile" action rows (a new `"action"` choices kind); import confirms on a second press, backs up,
+  swaps the live profile, and re-applies cheap settings (audio/quality; display settings need a
+  restart). Tests: export→import round-trip, older/minimal backfill, corrupt→None, backup
+  (`tools/test_meta.py`); smoke drives the export→import action rows.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

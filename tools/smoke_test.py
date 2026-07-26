@@ -95,7 +95,28 @@ def main():
         app.settings_index = idx
         app.adjust_setting(idx, 1)
         render_frame()
-    print("settings adjustments OK")
+
+    # profile export / import action rows (CAB-27): export writes a file, then
+    # import confirms on the second press and swaps the profile back in.
+    import meta.profile as _pm
+    export_idx = next(i for i, r in enumerate(game_main.SETTINGS_ROWS)
+                      if r[1] == "export_profile")
+    import_idx = export_idx + 1
+    app.profile["settings"]["player_name"] = "SMK"
+    app.settings_index = export_idx
+    app.adjust_setting(export_idx, 1)                # export
+    render_frame()
+    assert os.path.exists(_pm.export_path()), "export did not write a file"
+    app.profile["settings"]["player_name"] = "AAA"   # change since export
+    app.settings_index = import_idx
+    app.adjust_setting(import_idx, 1)                # arm (first press)
+    assert app._import_armed
+    app.adjust_setting(import_idx, 1)                # confirm (second press)
+    assert not app._import_armed
+    assert app.profile["settings"]["player_name"] == "SMK"   # imported value
+    render_frame()
+    os.remove(_pm.export_path())                      # clean up the fixture
+    print("settings adjustments OK (incl. profile export/import)")
 
     # music sequencer: pools discovered, sections shuffle without repeats
     for pool, minimum in (("menu", 3), ("game", 6), ("boss", 2)):

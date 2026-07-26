@@ -219,6 +219,54 @@ def replay_canonicalization_stable_across_key_order():
     print("replay canonicalization stable across key order OK")
 
 
+def profile_export_import():
+    with tempfile.TemporaryDirectory() as d:
+        prof_path = os.path.join(d, "profile.json")
+        exp_path = os.path.join(d, "export.json")
+
+        # build a profile with real progress, save it, export it
+        p = profile_mod.load(prof_path)         # fresh defaults
+        sec = profile_mod.game_section(p, "solitaire")
+        sec["achievements"]["first_win"] = {"unlocked_at": "2026-01-01T00:00:00"}
+        sec["lifetime"]["sol_games"] = 42
+        p["settings"]["player_name"] = "ZED"
+        assert profile_mod.export_profile(p, exp_path) == exp_path
+
+        # import round-trips: same values come back (modulo backfilled defaults)
+        imported = profile_mod.import_profile(exp_path)
+        assert imported is not None
+        isec = profile_mod.game_section(imported, "solitaire")
+        assert isec["lifetime"]["sol_games"] == 42
+        assert "first_win" in isec["achievements"]
+        assert imported["settings"]["player_name"] == "ZED"
+        assert imported["version"] == profile_mod.SCHEMA_VERSION
+
+        # a minimal / older dict imports and backfills to the current schema
+        minimal = os.path.join(d, "minimal.json")
+        with open(minimal, "w") as f:
+            json.dump({"version": 2, "settings": {"player_name": "OLD"}}, f)
+        m = profile_mod.import_profile(minimal)
+        assert m is not None
+        assert m["settings"]["player_name"] == "OLD"
+        assert "cabinet_man" in m and "tabletop" in m["settings"]   # backfilled
+
+        # corrupt file -> clean failure (None), nothing implied about current
+        bad = os.path.join(d, "bad.json")
+        with open(bad, "w") as f:
+            f.write("{ not valid json ...")
+        assert profile_mod.import_profile(bad) is None
+        assert profile_mod.import_profile(os.path.join(d, "nope.json")) is None
+
+        # backup copies the current profile to a timestamped sibling
+        profile_mod.save(p, prof_path)
+        backup = profile_mod.backup_profile(prof_path)
+        assert backup and os.path.exists(backup)
+        assert profile_mod.load(backup)["settings"]["player_name"] == "ZED"
+        # nothing to back up on a fresh cabinet
+        assert profile_mod.backup_profile(os.path.join(d, "absent.json")) is None
+    print("profile export/import OK (round-trip, backfill, corrupt->None, backup)")
+
+
 if __name__ == "__main__":
     migration_v1()
     p = run_campaign_with_meta()
@@ -227,4 +275,5 @@ if __name__ == "__main__":
     replay_tamper_detection()
     replay_unsigned_legacy_loads_unverified()
     replay_canonicalization_stable_across_key_order()
+    profile_export_import()
     print("ALL META TESTS PASSED")

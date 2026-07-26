@@ -111,6 +111,8 @@ SETTINGS_ROWS = [
     ("Music volume", "music_vol", "float"),
     ("SFX volume", "sfx_vol", "float"),
     ("Show FPS", "show_fps", [False, True]),
+    ("Export profile", "export_profile", "action"),
+    ("Import profile", "import_profile", "action"),
 ]
 DISPLAY_KEYS = {"vsync", "fullscreen"}  # need a window/context rebuild
 
@@ -182,6 +184,8 @@ class App:
         self.menu_index = 0
         self.mode_index = 0
         self.settings_index = 0
+        self.settings_msg = ""        # export/import status line
+        self._import_armed = False    # import confirm (two-press)
         self.skin_index = 0
         self.run = None
         self.run_stats_tracker = None
@@ -400,6 +404,9 @@ class App:
     def adjust_setting(self, index, direction):
         label, key, choices = SETTINGS_ROWS[index]
         s = self.profile["settings"]
+        if choices == "action":
+            self._settings_action(key)
+            return
         if choices == "float":
             s[key] = round(min(1.0, max(0.0, s[key] + 0.1 * direction)), 2)
         else:
@@ -427,6 +434,44 @@ class App:
             profile_mod.ambient_section(self.profile)["current"] = s["ambient_mode"]
             self.ambient.set_preset(self._current_ambient_preset())
         self.save_profile()
+
+    def _settings_action(self, key):
+        """Export / import the profile (CAB-27). Fixed file path — no dialog."""
+        if key == "export_profile":
+            self._import_armed = False
+            path = profile_mod.export_profile(self.profile)
+            self.settings_msg = (f"Exported to {os.path.basename(path)}" if path
+                                 else "Export failed (couldn't write file)")
+            self.audio.play("menu_select")
+            return
+        # import: confirm on a second press (it replaces the live profile)
+        imported = profile_mod.import_profile()
+        if imported is None:
+            self._import_armed = False
+            self.settings_msg = f"No {profile_mod.EXPORT_NAME} found (or corrupt)"
+            return
+        if not self._import_armed:
+            self._import_armed = True
+            self.settings_msg = "Replace current profile? Import again to confirm."
+            return
+        # confirmed: back up the current profile, then swap in the imported one
+        self._import_armed = False
+        backup = profile_mod.backup_profile()
+        self.profile = imported
+        self.save_profile()
+        self._apply_imported_settings()
+        note = f" (backup: {os.path.basename(backup)})" if backup else ""
+        self.settings_msg = "Profile imported — restart for display settings" + note
+        self.audio.play("win")
+
+    def _apply_imported_settings(self):
+        """Re-apply the cheap live settings after an import (audio/quality);
+        display-level settings (vsync/fullscreen) take a restart."""
+        s = self.profile["settings"]
+        self.audio.set_volumes(s.get("sfx_vol", 1.0), s.get("music_vol", 0.45))
+        self.renderer.apply_quality(bloom=s.get("bloom", "full"),
+                                    particles=s.get("particles", "high"))
+        self.audio.set_music_enabled(s.get("music", True))
 
     # --------------------------------------------------------------- input
     def handle_keydown(self, key):
@@ -664,13 +709,17 @@ class App:
 
         elif self.state == SETTINGS_SCREEN:
             if key == pygame.K_ESCAPE:
+                self._import_armed = False
+                self.settings_msg = ""
                 self.save_profile()
                 self.state = MENU
             elif key in (pygame.K_UP, pygame.K_w):
                 self.settings_index = (self.settings_index - 1) % len(SETTINGS_ROWS)
+                self._import_armed = False    # moving off the row cancels confirm
                 audio.play("menu_move")
             elif key in (pygame.K_DOWN, pygame.K_s):
                 self.settings_index = (self.settings_index + 1) % len(SETTINGS_ROWS)
+                self._import_armed = False
                 audio.play("menu_move")
             elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d,
                          pygame.K_RETURN):
@@ -1784,17 +1833,24 @@ class App:
     def draw_settings(self):
         o = self.renderer.overlay
         s = self.profile["settings"]
-        o.text("SETTINGS", self.W / 2, 80, size=44, color=EMBER, center=True)
+        o.text("SETTINGS", self.W / 2, 70, size=40, color=EMBER, center=True)
         for i, (label, key, choices) in enumerate(SETTINGS_ROWS):
-            y = 190 + i * 52
+            y = 132 + i * 36
             selected = i == self.settings_index
             color = TEXT if selected else DIM
             prefix = "> " if selected else "  "
-            o.text(prefix + label, self.W / 2 - 330, y, size=24, color=color)
-            value = settings_value_label(key, s[key])
+            o.text(prefix + label, self.W / 2 - 330, y, size=20, color=color)
+            if choices == "action":
+                value = "▶ press" if not (key == "import_profile"
+                                          and self._import_armed) else "confirm?"
+            else:
+                value = settings_value_label(key, s[key])
             o.text(f"< {value} >" if selected else value,
-                   self.W / 2 + 160, y, size=24,
+                   self.W / 2 + 160, y, size=20,
                    color=GOLD if selected else DIM)
+        if self.settings_msg:
+            o.text(self.settings_msg, self.W / 2, self.H - 58, size=15,
+                   color=theme.GOOD, center=True)
         o.text("Left/Right: change   Esc: back",
                self.W / 2, self.H - 40, size=14, color=DIM, center=True)
 

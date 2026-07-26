@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 profile.json
+profile.backup-*.json
+cabinet_profile_export.json
 highscore.txt
 usermusic/
 arcade.db
