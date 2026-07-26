@@ -9,6 +9,7 @@ from game.theme import TEXT, DIM, GOLD, EMBER, DANGER, BAR_BG
 from render.renderer import Batcher
 from render.voxel import quat_axis_angle
 
+from games.voxelhell.pilot import create_pilot  # noqa: F401 — cabinet opt-in
 from games.voxelhell.skins import SKINS
 from games.voxelhell.world import World, INTERMISSION, INTRO
 

@@ -70,9 +70,26 @@ architecture in `README.md`; deploy in `DEPLOY.md`.)
   `run.pilot_touched` flags any run Cabinet Man drove any part of — high-score submission is
   skipped, the local replay is still recorded but marked `"pilot": true`, and achievement
   unlocks are suppressed for that run. Tests in `tools/test_pilot.py`; `tools/smoke_test.py`
-  drives a live summon → pilot moves → handback on Solitaire. **NEXT (Epic E, owner's headline
-  interest): E2 Voxel Hell, E3 Serpent, E4 Breaker pilots (CAB-33/34/35), then E5 attract-mode
-  integration (CAB-36).**
+  drives a live summon → pilot moves → handback on Solitaire.
+- **Cabinet Man pilots — Breaker (CAB-35), Voxel Hell (CAB-33).** ✅ `games/breaker/pilot.py`
+  the "uncanny paddle": stands still while the ball is far, computes the exact latest frame it
+  can start a single full-speed glide and still intercept (`solve_intercept` folds wall bounces
+  via triangle-wave reflection), aims returns with edge-of-paddle english toward the nearer
+  surviving brick cluster; clears level 1 with zero deaths on 3 seeds. ✅ `games/voxelhell/pilot.py`
+  "never wastes a shot": every target's future position is a closed-form sum-of-sines
+  (`enemy_pos_at`/`boss_pos_at` transcribed from the sim), `solve_vertical_intercept` fixed-points
+  the straight-up bullet's arrival, and a per-target claim ledger (keyed by `id`, expiring past
+  each bullet's predicted arrival) never over-commits more bullets than a target has hp — so
+  `shots == hits` holds exactly through the opening waves (verified frame-by-frame, 7 seeds, in
+  `tools/test_pilot.py` via the no-settled-miss invariant). Holds fire entirely during the
+  spread buff (3 uncontrolled angled bullets would break the invariant); dodges by solving each
+  hazard's exact row-crossing (no position sampling) and scanning the field for max clearance
+  with hysteresis so it doesn't flap. Known v1 limitation (documented in the module + honestly
+  in Jira): a still-flying-in enemy can very rarely drift into a shot's column in dense late
+  waves and eat it (~1 shot per several full games) — closing it needs fly-in prediction,
+  deferred. Both pilots' closed-form solvers are cross-checked against brute-force steppers.
+  Smoke drives a live summon→fire→handback on Voxel Hell (the sim-game pilot path). **NEXT
+  (Epic E): E3 Serpent pilot (CAB-34), then E5 attract-mode integration (CAB-36).**
 
 ### 🔧 Next — finish the card/tabletop suite (reuse the `games/cards/` kit)
 1. ✅ **Rummy lay-offs onto the knocker's melds (CAB-6).** `apply_layoffs(defender_cards,

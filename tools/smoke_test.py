@@ -561,6 +561,36 @@ def main():
     assert app.pilot is None
     print(f"cabinet man OK (pilot won={pilot_won}, pilot_touched={cm.pilot_touched})")
 
+    # Cabinet Man on a SIM game (Voxel Hell): the pilot returns a synthesized
+    # InputState that main.py feeds into the run instead of the human's — so
+    # this exercises the other pilot path (fire/dodge bits, not direct model
+    # actions). Summon, let it play + shoot, confirm the run is flagged and a
+    # real key hands back.
+    app.game_id = "voxelhell"
+    app.state = game_main.MENU
+    app.start_run("campaign")
+    assert app.pilot is None and app.state == game_main.PLAYING
+    vh = app.run
+    app.gameplay_input = lambda: InputState()    # neutral human input
+    app.handle_keydown(pygame.K_F1)              # summon Cabinet Man
+    assert app.pilot is not None
+    for _ in range(240):                         # ~4s: enough to line up + fire
+        app.update_playing(dt)
+        if app.run.world.stats["shots"] > 0:
+            break
+    render_frame()                               # exercises the HUD + badge
+    assert vh.pilot_touched
+    vh_shots = vh.world.stats["shots"]
+    assert vh_shots > 0, "pilot never fired on voxelhell"
+    # shot economy: any shots-hits gap is only bullets still in flight (the
+    # just-fired one hasn't landed yet) — never a settled miss.
+    settled = (vh.world.stats["shots"] - vh.world.stats["hits"]
+               - len(vh.world.player_bullets))
+    assert settled <= 0, f"voxelhell pilot settled a miss ({settled})"
+    app.handle_keydown(pygame.K_LEFT)            # a real key: instant handback
+    assert app.pilot is None
+    print(f"cabinet man (voxel hell) OK (fired {vh_shots}, no settled miss, handback)")
+
     pygame.quit()
     print("SMOKE TEST PASSED")
 
