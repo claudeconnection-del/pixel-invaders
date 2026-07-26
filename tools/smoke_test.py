@@ -487,6 +487,50 @@ def main():
     print(f"video poker OK (bet={pr.model.bet}, last={pr.model.last_result[0]}, "
           f"rebuys={poker_sec['lifetime']['vp_rebuys']})")
 
+    # backgammon (TABLETOP): roll, click a source then a destination (driving
+    # the real hit-test helpers, not the model directly) for several human
+    # turns interleaved with house AI turns; assert checker conservation.
+    app.game_id = "backgammon"
+    app.state = game_main.MENU
+    app.start_run("standard")
+    assert app.state == game_main.PLAYING
+    br = app.run
+    br._W, br._H = 1280, 860
+    app.gameplay_input = lambda: InputState()
+    turns = 0
+    guard = 0
+    while turns < 6 and br.model.winner is None and guard < 500:
+        guard += 1
+        if br.model.turn == "A":
+            if not br.model.dice:
+                br._roll()
+                render_frame()
+                if not br.model.dice:      # no legal moves this roll: passed
+                    turns += 1
+                continue
+            legal = br._legal_next_moves()
+            if not legal:
+                break
+            mv = legal[0]
+            src, dst = mv["from"], mv["to"]
+            sx, sy, sw, sh = br._bar_rect() if src == "bar" else br._point_rect(src)
+            br._click(sx + sw / 2, sy + sh / 2)
+            dx, dy, dw, dh = (br._off_rect("A") if dst == "off"
+                             else br._point_rect(dst))
+            br._click(dx + dw / 2, dy + dh / 2)
+            render_frame()               # exercises board/checker/dice draw
+            if not br.model.dice:         # turn committed
+                turns += 1
+        else:
+            app.update_playing(dt)        # drives the ~0.8s AI beat (roll, move)
+            render_frame()
+    assert br.model.checker_count("A") == 15 and br.model.checker_count("B") == 15
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print(f"backgammon OK ({turns} human turns driven, "
+          f"pips A={br.model.pip_count('A')} B={br.model.pip_count('B')})")
+
     # Cabinet Man: F1 summons the house pilot on an opted-in game (Solitaire),
     # it plays a few moves on its own, then any real input instantly hands
     # back the seat — exercising summon -> pilot moves -> handback live.
