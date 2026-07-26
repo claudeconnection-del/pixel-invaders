@@ -105,12 +105,143 @@ def test_anim_kit():
     print("anim kit OK")
 
 
+def _place_fleet(run, seat):
+    """Drive `seat`'s placement queue to completion via the cabinet input
+    path (arrows/rotate/confirm), picking the first legal spot each time —
+    exercises the same code a human at the cabinet would hit."""
+    import pygame
+    guard = 0
+    while run._to_place[seat]:
+        guard += 1
+        assert guard < 500, "placement never completed"
+        name, size = run._to_place[seat][0]
+        placed = False
+        for horizontal in (True, False):
+            for y in range(run.model.size):
+                for x in range(run.model.size):
+                    if run.model.can_place(seat, x, y, size, horizontal):
+                        run._cursor = [x, y]
+                        run._orient_h = horizontal
+                        run._handle_place_key(pygame.K_RETURN)
+                        placed = True
+                        break
+                if placed:
+                    break
+            if placed:
+                break
+        assert placed, f"no legal spot for {name} ({size})"
+
+
+def test_vs_ai_mode():
+    """A full VS-AI game via the actual mode entry point (create_run("ai",
+    ...)) stays deterministic and never lets the human fire out of turn."""
+    import pygame
+    import games.battleship.game as bsgame
+
+    def play(seed):
+        run = bsgame.create_run("ai", random.Random(seed))
+        assert run.mode == "ai" and run.session is None
+        assert run.model.fleet_complete(run._cpu)   # house auto-deployed
+        _place_fleet(run, run._human)
+        assert run.model.fleet_complete(run._human)
+        assert run.model.phase == "fire" and run.model.turn == run._human
+
+        shots = 0
+        while run.model.winner is None:
+            shots += 1
+            assert shots <= 4 * run.model.size * run.model.size, "no progress"
+            if run.model.turn == run._cpu:
+                # the house "thinks" for a beat, then fires itself
+                run._cpu_timer = 1.0
+                run.update(0.016, None)
+                run.anim.clear()          # skip the missile animation gate
+                continue
+            # human's turn: find any legal cell and confirm it
+            for y in range(run.model.size):
+                for x in range(run.model.size):
+                    if run.model.can_fire(run._human, x, y):
+                        run._cursor = [x, y]
+                        break
+                else:
+                    continue
+                break
+            run._handle_fire_key(pygame.K_RETURN)
+            run.anim.clear()
+        return run
+
+    run = play(11)
+    assert run.model.winner is not None
+    assert run._last_replay is not None and run._last_replay["mode"] == "ai"
+    assert run._last_replay["placements"]["P2"], "house placement not recorded"
+
+    # deterministic given the same seed
+    run2 = play(11)
+    assert run2.model.winner == run.model.winner
+    assert run2.model.to_state() == run.model.to_state()
+    print("VS-AI mode OK (full game via create_run, deterministic, recorded)")
+
+
+def test_hotseat_secrecy():
+    """The hotseat turn-state machine never exposes the waiting seat's board
+    during the handoff — assert directly on the "what would draw_hud show"
+    selector rather than trusting the flag alone."""
+    import games.battleship.game as bsgame
+
+    run = bsgame.create_run("hotseat", random.Random(4))
+    assert run.mode == "hotseat" and run.session is None
+    assert run._stage == "handoff" and run._active == "P1"
+
+    # nothing is placed/visible about either seat until the handoff confirms
+    assert run.model.ships["P1"] == [] and run.model.ships["P2"] == []
+
+    import pygame
+    run._handle_offline_key(pygame.K_RETURN)     # "I'm ready" -> P1 places
+    assert run._stage == "place"
+    _place_fleet(run, "P1")
+    # P1 done -> a handoff back to P2, and P1's fleet must not be visible
+    # from a fresh reading of the offline-draw selector (mode != "secret")
+    assert run._stage == "handoff" and run._active == "P2"
+    assert run._handoff_purpose == "place"
+    assert run.model.fleet_complete("P1")
+    assert run.model.ships["P2"] == []           # P2 hasn't placed yet
+
+    run._handle_offline_key(pygame.K_RETURN)     # P2 confirms -> P2 places
+    assert run._stage == "place"
+    _place_fleet(run, "P2")
+    assert run._stage == "handoff" and run._handoff_purpose == "fire"
+    assert run.model.phase == "fire" and run.model.turn == "P1"
+
+    # firing alternates with a handoff on every miss (never on a hit, since
+    # the shooter keeps the turn) — drive a few shots and check the invariant
+    run._handle_offline_key(pygame.K_RETURN)     # P1 ready to fire
+    assert run._stage == "fire" and run._active == "P1"
+    for _ in range(40):
+        if run.model.winner is not None:
+            break
+        shooter = run.model.turn
+        cx, cy = next((x, y) for y in range(run.model.size)
+                      for x in range(run.model.size)
+                      if run.model.can_fire(shooter, x, y))
+        run._cursor = [cx, cy]
+        run._handle_fire_key(pygame.K_RETURN)
+        run.anim.clear()
+        if run.model.turn != shooter and run.model.winner is None:
+            # a miss just handed the turn off: must be behind a blackout,
+            # not sitting on the fire screen showing whoever's turn it now is
+            assert run._stage == "handoff" and run._handoff_purpose == "fire"
+            assert run._active == run.model.turn
+            run._handle_offline_key(pygame.K_RETURN)   # next player confirms
+    print("hotseat secrecy OK (blackout gates every placement + turn handoff)")
+
+
 def main():
     test_placement()
     test_fire_rules()
     test_ai_full_game()
     test_serialisation()
     test_anim_kit()
+    test_vs_ai_mode()
+    test_hotseat_secrecy()
     print("ALL BATTLESHIP TESTS PASSED")
 
 

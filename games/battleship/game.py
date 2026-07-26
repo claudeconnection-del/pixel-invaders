@@ -24,7 +24,8 @@ from games.board.companion import qr
 from games.board.companion.server import CompanionServer, DEFAULT_PORT
 from games.board.companion.session import SecretLocalSession
 from games.board.replay import BoardReplay, BoardReplayRecorder, save as _save_replay
-from games.battleship.model import BattleshipModel, PLAYERS
+from games.battleship.ai import ai_fire
+from games.battleship.model import BattleshipModel, FLEET, OTHER, PLAYERS
 
 _APP_HTML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "board", "phone", "app.html")
@@ -104,7 +105,7 @@ INFO = GameInfo(
     "battleship", "BATTLESHIP",
     "Hidden fleets, secret phones, one shot a turn.",
     showcase_sprite="ship_vanguard",
-    modes=[("secret", "SECRET LOCAL")],
+    modes=[("secret", "SECRET LOCAL"), ("ai", "VS AI"), ("hotseat", "HOTSEAT")],
     has_scores=False,      # win/lose, not a score — stays out of initials/replay flow
     attract=False,
     game_music=True,
@@ -161,25 +162,35 @@ class BattleshipRun(GameRun):
         self._rec = BoardReplayRecorder("battleship", self.mode)
         self._last_replay = None
 
-        # secret-local infra — hooks also record placements/moves as they apply
-        def _apply(model, seat, action):
-            res = _apply_move(model, seat, action)
-            if res is not None:
-                self._rec.move(seat, action["x"], action["y"])
-            return res
-
-        def _ready(model, seat, action):
-            ok = _commit_fleet(model, seat, action)
-            if ok:
-                self._rec.placement(seat, action.get("layout") or [])
-            return ok
-
-        self.session = SecretLocalSession(
-            self.model, secret_fn=secret_view, apply_fn=_apply,
-            ready_fn=_ready, begin_fn=_begin_fire, rng=rng)
+        self.session = None
         self.server = None
         self.host_error = None
         self._qr_surf = None
+        self._status = {"seats": []}
+
+        if self.mode == "secret":
+            # secret-local infra — hooks also record placements/moves as
+            # they apply
+            def _apply(model, seat, action):
+                res = _apply_move(model, seat, action)
+                if res is not None:
+                    self._rec.move(seat, action["x"], action["y"])
+                return res
+
+            def _ready(model, seat, action):
+                ok = _commit_fleet(model, seat, action)
+                if ok:
+                    self._rec.placement(seat, action.get("layout") or [])
+                return ok
+
+            self.session = SecretLocalSession(
+                self.model, secret_fn=secret_view, apply_fn=_apply,
+                ready_fn=_ready, begin_fn=_begin_fire, rng=rng)
+            self._status = self.session.status()
+        else:
+            # CAB-25: VS-AI / hotseat — no phones, no server; the cabinet's
+            # own keyboard drives placement and firing.
+            self._setup_offline()
 
         # replay rewatch state (entered with R on the over screen)
         self.replay = None
@@ -190,7 +201,6 @@ class BattleshipRun(GameRun):
 
         # cached snapshots for draw (built each update on the game thread)
         self._public = public_view(self.model)
-        self._status = self.session.status()
 
     # ------------------------------------------------------- cabinet contract
     @property
@@ -221,9 +231,13 @@ class BattleshipRun(GameRun):
         return {"win": self.model.winner is not None}
 
     def handle_key(self, key):
-        # During play the phones drive; the cabinet only takes keys on the
-        # over screen, to enter/steer the per-perspective replay.
+        # Secret-local: phones drive during play; the cabinet only takes keys
+        # on the over screen, to enter/steer the per-perspective replay.
+        # VS-AI/hotseat: the cabinet's own keyboard drives placement + firing
+        # for as long as the match is live (model.phase != "over").
         import pygame
+        if self.mode != "secret" and self.model.phase != "over":
+            return self._handle_offline_key(key)
         if self.model.phase != "over":
             return False
         if self.replay is None:
@@ -263,6 +277,126 @@ class BattleshipRun(GameRun):
 
     def __del__(self):
         self.close()
+
+    # ------------------------------------------------ VS-AI / hotseat (CAB-25)
+    def _setup_offline(self):
+        """No phones, no server: arrows + Enter/Space (no mouse — matches the
+        design's plan) drive placement and firing directly. `hotseat` gates
+        every stage change behind a full-screen blackout (`_stage=="handoff"`)
+        so passing the cabinet between two humans never flashes a board the
+        other shouldn't see yet; `ai` never enters a handoff at all."""
+        self._cursor = [0, 0]
+        self._orient_h = True
+        self._to_place = {p: list(FLEET) for p in PLAYERS}
+        self._cpu_timer = 0.0
+        if self.mode == "ai":
+            self._human, self._cpu = "P1", "P2"
+            self.model.random_place(self._cpu)
+            self._to_place[self._cpu] = []
+            self._rec.placement(self._cpu, self._layout_of(self._cpu))
+            self._active = self._human
+            self._stage = "place"
+            self._handoff_purpose = None
+        else:  # hotseat
+            self._human = self._cpu = None
+            self._active = "P1"
+            self._stage = "handoff"
+            self._handoff_purpose = "place"
+
+    def _layout_of(self, seat):
+        """`seat`'s placed fleet in the replay recorder's own format
+        ({name,size,x,y,horizontal}) — derived straight from model state so
+        there's no separate placement bookkeeping to keep in sync."""
+        out = []
+        for s in self.model.ships[seat]:
+            cells = s["cells"]
+            x0, y0 = cells[0]
+            horizontal = len(cells) < 2 or cells[1][1] == y0
+            out.append({"name": s["name"], "size": s["size"],
+                        "x": x0, "y": y0, "horizontal": horizontal})
+        return out
+
+    def _handle_offline_key(self, key):
+        import pygame
+        if self.mode == "hotseat" and self._stage == "handoff":
+            if key in (pygame.K_RETURN, pygame.K_SPACE):
+                self._stage = self._handoff_purpose
+                self._cursor = [0, 0]
+            return True
+        if self.model.phase == "place":
+            return self._handle_place_key(key)
+        if self.mode == "ai" and self.model.turn == self._cpu:
+            return True    # the house is "thinking" (update() drives it)
+        return self._handle_fire_key(key)
+
+    def _handle_place_key(self, key):
+        import pygame
+        seat = self._active
+        queue = self._to_place[seat]
+        if not queue:
+            return True
+        name, size = queue[0]
+        n = self.model.size
+        x, y = self._cursor
+        if key in (pygame.K_LEFT, pygame.K_a):
+            self._cursor[0] = max(0, x - 1)
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            self._cursor[0] = min(n - 1, x + 1)
+        elif key in (pygame.K_UP, pygame.K_w):
+            self._cursor[1] = max(0, y - 1)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self._cursor[1] = min(n - 1, y + 1)
+        elif key == pygame.K_r:
+            self._orient_h = not self._orient_h
+        elif key in (pygame.K_RETURN, pygame.K_SPACE):
+            if self.model.place_ship(seat, name, size, x, y, self._orient_h):
+                queue.pop(0)
+                if not queue:
+                    self._finish_placement(seat)
+        return True
+
+    def _finish_placement(self, seat):
+        self._rec.placement(seat, self._layout_of(seat))
+        self._cursor = [0, 0]
+        if self.mode == "ai":
+            self.model.begin_fire(self._human)
+            return
+        if seat == "P1":                    # hotseat: P1 done -> pass to P2
+            self._active = "P2"
+            self._stage = "handoff"
+            self._handoff_purpose = "place"
+        else:                                # both fleets placed -> fire away
+            self.model.begin_fire("P1")
+            self._active = "P1"
+            self._stage = "handoff"
+            self._handoff_purpose = "fire"
+
+    def _handle_fire_key(self, key):
+        import pygame
+        n = self.model.size
+        x, y = self._cursor
+        if key in (pygame.K_LEFT, pygame.K_a):
+            self._cursor[0] = max(0, x - 1)
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            self._cursor[0] = min(n - 1, x + 1)
+        elif key in (pygame.K_UP, pygame.K_w):
+            self._cursor[1] = max(0, y - 1)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self._cursor[1] = min(n - 1, y + 1)
+        elif key in (pygame.K_RETURN, pygame.K_SPACE):
+            shooter = self.model.turn
+            cx, cy = self._cursor
+            if self.model.can_fire(shooter, cx, cy):
+                res = self.model.fire(shooter, cx, cy)
+                self._rec.move(shooter, cx, cy)
+                self._on_move(res)
+                self._cursor = [0, 0]
+                if self.mode == "hotseat" and self.model.phase == "fire" \
+                        and self.model.turn != shooter:
+                    self._active = self.model.turn
+                    self._stage = "handoff"
+                    self._handoff_purpose = "fire"
+        return True
 
     # --------------------------------------------------------------- server
     def _ensure_server(self):
@@ -320,22 +454,43 @@ class BattleshipRun(GameRun):
                     else:
                         self.replay_playing = False
             return
-        self._ensure_server()
+        if self.mode == "secret":
+            self._ensure_server()
+            self.anim.update(dt)
+            if not self.anim.busy:
+                self.session.gate = False
+                for res in self.session.pump():
+                    self._on_move(res)
+            self._public = public_view(self.model)
+            self._status = self.session.status()
+            return
+        # VS-AI / hotseat: no session to pump; the house fires itself on a
+        # short "thinking" beat once it's the CPU's turn (mirrors the same
+        # timed cadence Gin Rummy's house AI uses).
         self.anim.update(dt)
-        if not self.anim.busy:
-            self.session.gate = False
-            for res in self.session.pump():
+        if self.mode == "ai" and self.model.phase == "fire" \
+                and self.model.turn == self._cpu and not self.anim.busy:
+            self._cpu_timer += dt
+            if self._cpu_timer >= 0.6:
+                self._cpu_timer = 0.0
+                x, y = ai_fire(self.model)
+                res = self.model.fire(self._cpu, x, y)
+                self._rec.move(self._cpu, x, y)
                 self._on_move(res)
+        else:
+            self._cpu_timer = 0.0
         self._public = public_view(self.model)
-        self._status = self.session.status()
 
     def _on_move(self, res):
         """A fire was applied on the authority; play it out on the TV before
-        the next move (the anim queue gates the session via `gate`)."""
-        self.session.gate = True
+        the next move (the anim queue gates the session via `gate`, when
+        there is one — VS-AI/hotseat have no session to gate)."""
+        if self.session is not None:
+            self.session.gate = True
 
         def done(_a):
-            self.session.gate = False
+            if self.session is not None:
+                self.session.gate = False
 
         self.anim.add(Anim("missile", 0.62, data=res, ease=ease_out, on_done=done))
         self.emit("bs_shot", **res)
@@ -369,6 +524,8 @@ class BattleshipRun(GameRun):
         o.text("BATTLESHIP", width / 2, 24, size=30, color=COBALT, center=True)
         if self.replay is not None:
             return self._draw_replay(o, width, height)
+        if self.mode != "secret":
+            return self._draw_offline(o, width, height)
         if self.host_error:
             return self._draw_host_error(o, width, height)
         if self.model.phase == "place":
@@ -376,6 +533,87 @@ class BattleshipRun(GameRun):
         self._draw_boards(o, width, height)
         if self.model.phase == "over":
             self._draw_over(o, width, height)
+
+    # -- VS-AI / hotseat screens (CAB-25)
+    def _draw_offline(self, o, width, height):
+        if self.model.phase == "over":
+            self._draw_boards(o, width, height)
+            self._draw_over(o, width, height)
+            return
+        if self.mode == "hotseat" and self._stage == "handoff":
+            return self._draw_blackout(o, width, height)
+        if self.model.phase == "place":
+            return self._draw_place(o, width, height)
+        self._draw_fire(o, width, height)
+
+    def _draw_blackout(self, o, width, height):
+        """Nothing sensitive renders until the incoming seat confirms —
+        no board flash on the handoff, ever."""
+        o.rect(0, 0, width, height, (6, 6, 8, 255))
+        who = "PLAYER 1" if self._active == "P1" else "PLAYER 2"
+        verb = "place your fleet" if self._handoff_purpose == "place" else "take aim"
+        o.text(f"PASS THE CABINET TO {who}", width / 2, height / 2 - 30,
+               size=28, color=GOLD, center=True)
+        o.text(f"Ready to {verb}? Press Enter/Space when the coast is clear.",
+               width / 2, height / 2 + 16, size=16, color=DIM, center=True)
+
+    def _draw_place(self, o, width, height):
+        cell = 34
+        n = self.model.size
+        gw = cell * n
+        ox, oy = width / 2 - gw / 2, 150
+        seat = self._active
+        o.text(f"{self._name(seat)} — PLACE YOUR FLEET", width / 2, oy - 40,
+               size=22, color=EMBER, center=True)
+        for y in range(n):
+            for x in range(n):
+                rx, ry = ox + x * cell, oy + y * cell
+                o.rect(rx + 1, ry + 1, cell - 2, cell - 2, _SEA)
+        for s in self.model.ships[seat]:
+            for cx, cy in s["cells"]:
+                o.rect(ox + cx * cell + 1, oy + cy * cell + 1, cell - 2,
+                       cell - 2, _SHIP)
+        queue = self._to_place[seat]
+        cx, cy = self._cursor
+        if queue:
+            name, size = queue[0]
+            cells = self.model.cells_for(cx, cy, size, self._orient_h) or []
+            ok = self.model.can_place(seat, cx, cy, size, self._orient_h)
+            col = GOOD if ok else DANGER
+            for px, py in cells:
+                o.rect(ox + px * cell + 1, oy + py * cell + 1, cell - 2,
+                       cell - 2, (*col[:3], 160))
+            orient = "horizontal" if self._orient_h else "vertical"
+            o.text(f"Placing: {name} ({size}, {orient})", width / 2,
+                   oy + gw + 30, size=18, color=TEXT, center=True)
+        o.text("Arrows: move   R: rotate   Enter: place   Esc: leave",
+               width / 2, height - 30, size=13, color=DIM, center=True)
+
+    def _draw_fire(self, o, width, height):
+        cell = 34
+        n = self.model.size
+        gw = cell * n
+        gap = 90
+        top = 150
+        left_x = width / 2 - gw - gap / 2
+        right_x = width / 2 + gap / 2
+        self._draw_grid(o, left_x, top, cell, "P1")
+        self._draw_grid(o, right_x, top, cell, "P2")
+        shooter = self.model.turn
+        if self.mode == "ai" and shooter == self._cpu:
+            o.text(f"{self._name(self._cpu)} is taking aim…", width / 2,
+                   top + gw + 40, size=20, color=EMBER, center=True)
+        else:
+            target = OTHER[shooter]
+            ox = left_x if target == "P1" else right_x
+            cx, cy = self._cursor
+            o.rect(ox + cx * cell + 1, top + cy * cell + 1, cell - 2,
+                   cell - 2, GOLD)
+            o.text(f"{self._name(shooter)} — aim and fire", width / 2,
+                   top + gw + 40, size=20, color=EMBER, center=True)
+        self._draw_missile(o, left_x, right_x, top, cell)
+        o.text("Arrows: aim   Enter: fire   Esc: leave", width / 2,
+               height - 30, size=13, color=DIM, center=True)
 
     # -- lobby / waiting + failure states
     def _draw_lobby(self, o, width, height):
@@ -537,6 +775,10 @@ class BattleshipRun(GameRun):
 
     # ------------------------------------------------------------- helpers
     def _name(self, seat):
+        if self.mode == "ai":
+            return "You" if seat == self._human else "The House"
+        if self.mode == "hotseat":
+            return "Player 1" if seat == "P1" else "Player 2"
         for s in self._status["seats"]:
             if s["seat"] == seat and s["name"]:
                 return s["name"]

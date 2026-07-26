@@ -708,6 +708,53 @@ def main():
     print(f"backgammon OK ({turns} human turns driven, "
           f"pips A={br.model.pip_count('A')} B={br.model.pip_count('B')})")
 
+    # battleship VS-AI + hotseat (CAB-25): boot each mode, place one ship via
+    # the cabinet cursor, then fire one shot — no companion server involved.
+    app.game_id = "battleship"
+    app.state = game_main.MENU
+    app.start_run("ai")
+    assert app.state == game_main.PLAYING
+    bs = app.run
+    assert bs.mode == "ai" and bs.session is None and bs.server is None
+    assert bs.model.fleet_complete(bs._cpu)          # house auto-deployed instantly
+    bs._cursor = [0, 0]
+    bs._orient_h = True
+    app.handle_keydown(pygame.K_RETURN)              # place the first ship
+    assert len(bs.model.ships[bs._human]) == 1
+    render_frame()                                   # exercises the placement draw
+    # skip to the fire phase to exercise one real shot via the cursor
+    bs.model.random_place(bs._human)
+    bs._to_place[bs._human] = []
+    bs.model.begin_fire(bs._human)
+    before_shots = len(bs.model.shots[bs._cpu])
+    cx, cy = next((x, y) for y in range(bs.model.size) for x in range(bs.model.size)
+                  if bs.model.can_fire(bs._human, x, y))
+    bs._cursor = [cx, cy]
+    app.handle_keydown(pygame.K_RETURN)              # fire
+    assert len(bs.model.shots[bs._cpu]) == before_shots + 1
+    render_frame()                                   # exercises the fire-phase draw
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+
+    app.game_id = "battleship"
+    app.state = game_main.MENU
+    app.start_run("hotseat")
+    bh = app.run
+    assert bh.mode == "hotseat" and bh._stage == "handoff" and bh._active == "P1"
+    render_frame()                                   # exercises the blackout draw
+    app.handle_keydown(pygame.K_RETURN)              # "ready" -> P1 places
+    assert bh._stage == "place"
+    bh._cursor = [0, 0]
+    bh._orient_h = True
+    app.handle_keydown(pygame.K_RETURN)              # place the first ship
+    assert len(bh.model.ships["P1"]) == 1
+    render_frame()
+    app.handle_keydown(pygame.K_ESCAPE)
+    app.handle_keydown(pygame.K_q)
+    assert app.state == game_main.MENU
+    print("battleship VS-AI + hotseat OK (boot, place one ship, fire one shot)")
+
     # Cabinet Man: F1 summons the house pilot on an opted-in game (Solitaire),
     # it plays a few moves on its own, then any real input instantly hands
     # back the seat — exercising summon -> pilot moves -> handback live.

@@ -322,6 +322,31 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   `tools/test_cards.py`; per-game target-list + confirm-dispatches-`_click` + modal-gating wiring
   in `tools/test_cards.py` and `tools/test_rummy.py`; smoke drives synthesized d-pad/button
   events through Solitaire (step, confirm draws a card, B clears, mouse hides).
+- **Battleship VS-AI + hotseat modes (CAB-25).** ✅ The deferred no-phones-needed modes from the
+  secret-local-multiplayer feature. `INFO.modes` gains `("ai","VS AI")` and `("hotseat","HOTSEAT")`
+  alongside the companion `"secret"` flagship — `BattleshipRun.__init__` branches on `self.mode`:
+  companion mode (`SecretLocalSession`/`CompanionServer`/QR lobby) is completely untouched; the
+  two new modes skip it entirely and drive placement/firing straight off the cabinet keyboard
+  (arrows + Enter/Space, no mouse — the design already agreed this needed no `main.py` changes,
+  since `handle_key`/`create_run(mode, rng)`/`MODE_SELECT` were already generic over `INFO.modes`).
+  **VS AI**: the human places their fleet via a placement cursor (arrows move, R rotates, Enter
+  confirms against the same `model.place_ship`/`can_place` the phone flow already validates
+  with); the house auto-deploys instantly via `model.random_place` and fires with the existing
+  tested `ai.ai_fire(model)` on a short "thinking" beat (mirrors Gin Rummy's house-AI cadence).
+  **Hotseat**: a `_stage` state machine (`handoff` → `place` ×2 → `handoff` → `fire` ↔ `handoff`)
+  gates every stage change behind a full-screen blackout ("Pass the cabinet to Player N") that
+  renders nothing sensitive until the incoming player confirms — a hit keeps the same shooter
+  firing with no interruption (matching the classic turn rule), a miss or a fresh placement
+  always re-blacks-out first. Both modes feed `games/board/replay.py`'s existing
+  `BoardReplayRecorder` unchanged (a placement/move is a placement/move regardless of who or what
+  produced it) via a `_layout_of(seat)` helper that derives the recorder's `{name,size,x,y,
+  horizontal}` shape straight from `model.ships`, so there's no separate placement bookkeeping to
+  keep in sync. Tests: `tools/test_battleship.py` gained a full deterministic VS-AI game driven
+  through the real `create_run("ai", ...)` entry point, and a hotseat test asserting the blackout
+  gates every placement and turn handoff (never leaving the `fire`/`place` screen up while the
+  other seat is what's live); `tools/test_companion.py` (the existing secret-local suite) stays
+  green untouched, confirming zero regression to the companion/phone path; smoke boots both new
+  modes, places one ship via the cursor, and fires one real shot in each.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
