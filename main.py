@@ -41,6 +41,7 @@ from meta import replay as replay_mod
 from meta.achievements import Achievement, AchievementEngine, evaluate_ambient
 from meta.outbox import Outbox
 from meta import outbox as outbox_mod
+from meta import completion as completion_mod
 from meta.stats import StatsTracker
 
 APP_NAME = "Cabinet Man"  # the product; "Emberlight" is its look (game/theme.py)
@@ -1782,15 +1783,24 @@ class App:
         o = self.renderer.overlay
         module = self.game
         engine = self.run_engine or self.engine_for_current_game()
-        o.text(f"{module.INFO.name} — ACHIEVEMENTS", self.W / 2, 55, size=32,
+        o.text(f"{module.INFO.name} — ACHIEVEMENTS", self.W / 2, 46, size=32,
                color=EMBER, center=True)
+        # cabinet-wide roll-up: how far through EVERYTHING (CAB-26)
+        comp = completion_mod.completion(self.profile, self.games)
+        earned, total = comp["total"]
+        o.text(completion_mod.completion_line(comp), self.W / 2, 90, size=16,
+               color=GOLD, center=True)
+        bar_w, bar_x = 380, self.W / 2 - 190
+        frac = (earned / total) if total else 0.0
+        o.rect(bar_x, 114, bar_w, 8, BAR_BG)
+        o.rect(bar_x, 114, bar_w * frac, 8, GOLD)
         col_w = 590
         run_stats = self.run.run_stats() if self.run else {}
         for i, a in enumerate(module.ACHIEVEMENTS):
             col = i % 2
             row = i // 2
             x = 60 + col * col_w
-            y = 118 + row * 98
+            y = 140 + row * 98
             unlocked = engine.is_unlocked(a.id)
             o.rect(x, y, col_w - 40, 84, PANEL_DIM)
             o.rect(x, y, 4, 84, GOLD if unlocked else HAIR)
@@ -1840,6 +1850,10 @@ class App:
             y = 160 + i * 46
             o.text(label, self.W / 2 - 280, y, size=20, color=DIM)
             o.text(value, self.W / 2 + 120, y, size=20, color=TEXT)
+        # cabinet-wide achievement roll-up (CAB-26), one cheap footer line
+        comp = completion_mod.completion(self.profile, self.games)
+        o.text(completion_mod.completion_line(comp), self.W / 2, self.H - 54,
+               size=15, color=GOLD, center=True)
         o.text("Esc: back", self.W / 2, self.H - 30, size=14, color=DIM, center=True)
 
     def draw_settings(self):

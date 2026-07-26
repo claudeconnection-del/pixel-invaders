@@ -296,6 +296,65 @@ def outbox_visibility():
     print("outbox visibility OK (pending count, status line, retry summary)")
 
 
+def completion_summary():
+    from meta import completion as comp_mod
+
+    class _A:
+        def __init__(self, aid):
+            self.id = aid
+
+    class _Mod:
+        def __init__(self, ids):
+            self.ACHIEVEMENTS = [_A(i) for i in ids]
+
+    modules = {
+        "alpha": _Mod(["a1", "a2", "a3"]),
+        "beta": _Mod(["b1", "b2"]),
+    }
+    # fabricated profile: alpha 2/3, beta 0/2, ambient 1 earned, cabinet_man 0
+    profile = {
+        "games": {
+            "alpha": {"achievements": {"a1": {}, "a2": {}}},
+            "beta": {"achievements": {}},
+        },
+        "ambient": {"achievements": {"night_owl": {}}},
+    }
+    comp = comp_mod.completion(profile, modules)
+    assert comp["per_game"]["alpha"] == (2, 3), comp["per_game"]
+    assert comp["per_game"]["beta"] == (0, 2), comp["per_game"]
+    amb_earned, amb_total = comp["ambient"]
+    assert amb_earned == 1 and amb_total == 4, comp["ambient"]
+    cm_earned, cm_total = comp["cabinet_man"]
+    assert cm_earned == 0 and cm_total >= 1, comp["cabinet_man"]
+    earned, total = comp["total"]
+    assert earned == 2 + 0 + amb_earned + cm_earned, comp["total"]
+    assert total == 3 + 2 + amb_total + cm_total, comp["total"]
+
+    # stale/unknown recorded ids never inflate earned past the module's own set
+    profile2 = {"games": {"alpha": {"achievements": {"a1": {}, "zz": {}}}}}
+    c2 = comp_mod.completion(profile2, {"alpha": _Mod(["a1", "a2", "a3"])})
+    assert c2["per_game"]["alpha"] == (1, 3), c2["per_game"]
+
+    # reading completion must not mutate the caller's profile (no section spawn)
+    empty = {}
+    comp_mod.completion(empty, modules)
+    assert empty == {}, empty
+
+    # zero-state: fresh profile -> 0/N with no ZeroDivision in the % line
+    fresh = comp_mod.completion({}, modules)
+    assert fresh["total"][0] == 0, fresh["total"]
+    line0 = comp_mod.completion_line(fresh)
+    assert "0%" in line0 and "0/" in line0, line0
+    # a real summary renders "earned/total · pct%"
+    line = comp_mod.completion_line(comp)
+    assert "/" in line and "%" in line, line
+    # fully-complete rolls up to 100%
+    full = comp_mod.completion_line({"total": (5, 5)})
+    assert "100%" in full, full
+    print("completion summary OK (per-game + ambient + cabinet-man rollup, "
+          "zero-state, no mutation)")
+
+
 if __name__ == "__main__":
     migration_v1()
     p = run_campaign_with_meta()
@@ -306,4 +365,5 @@ if __name__ == "__main__":
     replay_canonicalization_stable_across_key_order()
     profile_export_import()
     outbox_visibility()
+    completion_summary()
     print("ALL META TESTS PASSED")

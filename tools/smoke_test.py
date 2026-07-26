@@ -65,6 +65,26 @@ def main():
             render_frame()
     print(f"cabinet screens OK for {GAME_IDS}")
 
+    # cabinet-wide completion roll-up reflects a real unlock (CAB-26)
+    from meta import completion as completion_mod
+    comp0 = completion_mod.completion(app.profile, app.games)
+    e0, tot = comp0["total"]
+    assert tot > 0 and "CABINET" in completion_mod.completion_line(comp0)
+    a0 = comp0["per_game"]["serpent"][0]
+    profile_mod.game_section(app.profile, "serpent")["achievements"]["__smoke__"] = {}
+    # unknown ids must NOT inflate earned past the module's own set
+    assert completion_mod.completion(app.profile, app.games)["per_game"]["serpent"][0] == a0
+    real = next(a.id for a in app.games["serpent"].ACHIEVEMENTS
+                if a.id not in profile_mod.game_section(app.profile, "serpent")["achievements"])
+    profile_mod.game_section(app.profile, "serpent")["achievements"][real] = {}
+    comp1 = completion_mod.completion(app.profile, app.games)
+    assert comp1["total"][0] == e0 + 1, (comp1["total"], e0)
+    # cleanup so later assertions see a pristine serpent section
+    sec = profile_mod.game_section(app.profile, "serpent")["achievements"]
+    sec.pop("__smoke__", None)
+    sec.pop(real, None)
+    print(f"cabinet completion OK ({e0}/{tot} rolled up, unknown ids ignored)")
+
     # menu nav regression: Down from PLAY must move even when HANGAR/SCORES
     # are hidden (studio), and category carousel must switch game groups
     from games import category_of

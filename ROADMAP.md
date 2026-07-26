@@ -240,6 +240,16 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   non-empty; `R` calls the existing `outbox.drain()` and banners the retry summary. Tests: the
   three helpers + queueing-unchanged in `tools/test_meta.py`; smoke queues offline scores and
   drives the R retry.
+- **Cabinet-wide achievement completion summary (CAB-26).** ✅ New pure `meta/completion.py`:
+  `completion(profile, modules)` rolls achievement progress up across every game module's
+  `.ACHIEVEMENTS` plus the two cabinet-level sets (ambient mood, Cabinet Man), returning
+  `{"total": (earned,total), "per_game": {gid:(e,t)}, "ambient": (e,4), "cabinet_man": (e,2)}`.
+  Read-only (never spawns/mutates profile sections) and earned counts intersect recorded ids with
+  each source's own set so stale/unknown ids can't inflate the figure. `completion_line(comp)` →
+  "CABINET 12/47 · 26%" (0% when nothing defined, no div-by-zero). Wired into `main.py`'s
+  ACHIEVEMENTS screen (header line + slim gold progress bar) and the STATS footer (one cheap line).
+  Tests: rollup math / stale-id / zero-state / no-mutation in `tools/test_meta.py`; smoke asserts a
+  real unlock moves the total and unknown ids are ignored.
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.
