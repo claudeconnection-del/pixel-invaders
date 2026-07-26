@@ -250,6 +250,35 @@ def test_rummy_tween_wiring():
     print("rummy tween wiring OK (draw + discard flights, low-motion no-op)")
 
 
+def test_rummy_pad_cursor_wiring():
+    import games.rummy.game as rgame
+
+    run = rgame.create_run("gin", random.Random(5))
+    section = {"achievements": {}, "lifetime": {}, "unlocked_skins": []}
+    run.attach_profile(section, {}, lambda: None)
+    assert run.model.turn == "P1" and run.model.phase == "draw"
+
+    targets = run.pad_targets()
+    ids = [t[0] for t in targets]
+    assert ids[0] == "stock" and ids[1] == "discard"
+    assert "knock" not in ids            # draw phase: nothing to knock with yet
+    assert len(targets) == 2 + 10        # + one per starting hand card
+
+    # confirm on the stock target draws a card, exactly like a mouse click
+    run.pad_cursor.target_id = "stock"
+    run.pad_cursor.confirm()
+    assert run.model.phase == "discard"
+    assert len(run.model.hands["P1"]) == 11
+
+    # a modal takes the board's attention: no targets until it closes
+    run.picker.open = True
+    assert run.pad_targets() == []
+    run.picker.open = False
+    assert run.pad_targets() != []
+    print("rummy pad cursor wiring OK (targets, confirm dispatches _click, "
+          "modal gating)")
+
+
 def test_rummy_stats_rows():
     import games.rummy as rummy
     from arcade.game_api import resolve_stats_rows
@@ -276,6 +305,7 @@ def main():
     test_rummy_achievements()
     test_rummy_wiring()
     test_rummy_tween_wiring()
+    test_rummy_pad_cursor_wiring()
     test_rummy_stats_rows()
     print("ALL RUMMY TESTS PASSED")
 

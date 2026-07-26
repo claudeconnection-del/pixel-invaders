@@ -6,6 +6,12 @@ render + felt/skin plumbing (games/cards/table), modeled on games/rummy/game.py.
 Set your bet (Left/Right, or M for max), D to deal. Toggle holds with the
 number keys 1-5 or by clicking a card, then D again to draw. R rebuys 200
 credits when you're tapped out.
+
+Gamepad (CAB-23, not yet wired): adopt `table.PadCursor` like Solitaire/Rummy
+— add a `pad_targets()` method (bet/deal button + one target per hand card),
+`self.pad_cursor = table.PadCursor(self)` in `__init__`, `pad_cursor.draw(o)`
+in `draw_hud`; the shared cursor's `confirm()` dispatches this module's own
+`_click` at the target center, so no other change is needed.
 """
 import pygame
 

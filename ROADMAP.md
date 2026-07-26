@@ -303,6 +303,25 @@ extensible skin picker. Monopoly remains spec-only per the original design (stre
   submit→upload→list→fetch round trip plus the orphan-score-gate rejection and offline
   degradation; smoke covers the share prompt appearing, R-retry surviving it, Y arming the
   share, and the SHARED tab's offline-gated path.
+- **Gamepad cursor for tabletop games (CAB-23).** ✅ New `PadCursor` in `games/cards/table.py`:
+  the host supplies `pad_targets() -> [(target_id, x, y, w, h)]` fresh every frame (its own
+  hit-testing's source of truth — Solitaire's stock/waste/4 foundations/7 tableau columns,
+  Rummy's stock/discard/knock-button/one-per-hand-card); `step(direction)` moves to the nearest
+  target strictly in that halfplane from the current one (no wraparound — at an edge, the far
+  side just doesn't step); `confirm()` dispatches the host's own `_click` at the target center,
+  so a pad press and a mouse click land identically; `clear()` clears `host.sel`. A target list
+  that's empty (a modal — picker/rules/auto-complete/win screen — has the board's attention, or
+  the hand/game ended) makes the cursor a no-op, reusing the same gates mouse clicks already
+  respect. `main.py` wires the D-pad/left-stick (`poll_pad_cursor`, sharing
+  `poll_pad_navigation`'s cooldown timer safely since that one already no-ops during `PLAYING`)
+  and A/B (`handle_pad_button`, only when the run exposes `.pad_cursor`); any mouse motion this
+  frame (`gameplay_input` now tracks `self._mouse_moved`) hides the cursor, mirroring menu focus.
+  Poker/backgammon get a 3-line adoption note in their module docstrings rather than the wiring
+  itself (bet/deal and roll/point targets are enough unlike the other two's richer boards).
+  Tests: `PadCursor` halfplane-stepping/no-wrap/confirm/clear/hide/empty-target geometry in
+  `tools/test_cards.py`; per-game target-list + confirm-dispatches-`_click` + modal-gating wiring
+  in `tools/test_cards.py` and `tools/test_rummy.py`; smoke drives synthesized d-pad/button
+  events through Solitaire (step, confirm draws a card, B clears, mouse hides).
 
 Spec: `docs/superpowers/specs/2026-07-14-card-tabletop-suite-design.md` ·
 Plan: `docs/superpowers/plans/2026-07-14-card-tabletop-suite.md`.

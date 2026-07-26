@@ -488,6 +488,30 @@ def main():
     sr.handle_key(pygame.K_n)               # fresh deal
     assert sr.model.cards_home == 0 and len(sr.model.stock) == 24
 
+    # gamepad cursor (CAB-23): D-pad steps between targets, A confirms via
+    # the same _click path a mouse would use, B clears the selection, and
+    # mouse motion hides the cursor again. Synthesize pad input the way
+    # smoke already synthesizes keys/clicks.
+    assert len(sr.pad_targets()) == 2 + 4 + 7   # stock+waste+4 foundations+7 cols
+    app.pad_state = lambda: (1.0, 0.0, False, False, 0.0)   # d-pad right
+    app.pad_nav_cooldown = 0.0
+    app.poll_pad_cursor(dt)
+    assert sr.pad_cursor.visible and sr.pad_cursor.target_id == "stock"
+    before_waste = len(sr.model.waste)
+    app.handle_pad_button(0)                # A: confirm -> draws a card
+    assert len(sr.model.waste) == before_waste + 1
+    sr.sel = "not none"
+    app.handle_pad_button(1)                # B: clears the selection
+    assert sr.sel is None
+    sr.pad_cursor.visible = True
+    app._mouse_moved = True                 # simulate mouse motion this frame
+    app.update_playing(dt)
+    assert not sr.pad_cursor.visible, "mouse motion must hide the pad cursor"
+    app._mouse_moved = False
+    del app.pad_state                       # restore the real (joystick-backed) method
+    print("solitaire pad cursor OK (step, confirm draws a card, "
+          "B clears, mouse motion hides)")
+
     # skin picker (shared table.SkinPicker): TAB opens; cycle deck + felt
     sr.handle_key(pygame.K_TAB)
     assert sr.picker.open

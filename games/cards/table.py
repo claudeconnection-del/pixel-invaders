@@ -72,6 +72,90 @@ class Tweens:
         return (fx + (tx - fx) * eased, fy + (ty - fy) * eased)
 
 
+class PadCursor:
+    """Shared pad-driven cursor for the tabletop games (CAB-23): couch play
+    without a mouse. `host` supplies `pad_targets() -> [(target_id, x, y, w,
+    h)]` each frame — its logical hit targets, the same source of truth its
+    own mouse hit-testing already uses. D-pad/stick `step(direction)` moves
+    to the nearest target strictly in that halfplane from the current one
+    (no wraparound: at an edge, the far side just doesn't step); `confirm()`
+    dispatches the host's own `_click` at the target's center, so a pad
+    press and a mouse click land identically; `clear()` clears the host's
+    current selection (`sel = None`, matching Solitaire/Rummy's own
+    board-state shape). Any mouse motion calls `hide()` (mirrors menu focus:
+    the two input methods never fight over the same frame)."""
+
+    def __init__(self, host):
+        self.host = host
+        self.target_id = None
+        self.visible = False
+
+    def show_for(self, target_id):
+        self.target_id = target_id
+        self.visible = True
+
+    def hide(self):
+        self.visible = False
+
+    def _current(self, targets):
+        if self.target_id is not None:
+            for t in targets:
+                if t[0] == self.target_id:
+                    return t
+        return targets[0] if targets else None
+
+    def step(self, direction):
+        targets = self.host.pad_targets()
+        if not targets:
+            return
+        cur = self._current(targets)
+        if cur is None:
+            return
+        if cur[0] != self.target_id:
+            self.show_for(cur[0])   # first step: land on the default target
+            return
+        _, cx, cy, cw, ch = cur
+        ccx, ccy = cx + cw / 2, cy + ch / 2
+        ux, uy = {"left": (-1, 0), "right": (1, 0),
+                 "up": (0, -1), "down": (0, 1)}[direction]
+        best, best_dist = None, None
+        for tid, x, y, w, h in targets:
+            if tid == cur[0]:
+                continue
+            tcx, tcy = x + w / 2, y + h / 2
+            ddx, ddy = tcx - ccx, tcy - ccy
+            if ux and ddx * ux <= 0:
+                continue
+            if uy and ddy * uy <= 0:
+                continue
+            dist = ddx * ddx + ddy * ddy
+            if best_dist is None or dist < best_dist:
+                best, best_dist = tid, dist
+        if best is not None:
+            self.target_id = best
+        self.visible = True
+
+    def confirm(self):
+        targets = self.host.pad_targets()
+        cur = self._current(targets)
+        if cur is None:
+            return
+        _, x, y, w, h = cur
+        self.host._click(x + w / 2, y + h / 2)
+
+    def clear(self):
+        self.host.sel = None
+
+    def draw(self, o):
+        if not self.visible:
+            return
+        cur = self._current(self.host.pad_targets())
+        if cur is None:
+            return
+        _, x, y, w, h = cur
+        card_render.hover_outline(o, x, y, w, h)
+
+
 def tabletop_store(settings):
     """The shared cosmetics store settings['tabletop'], defaults backfilled."""
     tt = settings.setdefault("tabletop", {}) if settings is not None else {}

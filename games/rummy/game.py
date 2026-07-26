@@ -83,6 +83,7 @@ class GinRummyRun(GameRun):
         self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
         self.tweens = table.Tweens()           # CAB-20: draw/discard flight animations
+        self.pad_cursor = table.PadCursor(self)  # CAB-23: gamepad play
         self.picker = table.SkinPicker(self)
         self.rules = table.RulesOverlay(self)
         self.rules_title = INFO.name
@@ -323,6 +324,23 @@ class GinRummyRun(GameRun):
             return False
         return any(deadwood([c for c in hand if c is not x]) <= 10 for x in hand)
 
+    # ------------------------------------------------ gamepad cursor (CAB-23)
+    def pad_targets(self):
+        """Discrete pad-navigable targets: stock, discard, the knock button
+        (when knocking is actually on offer), and one per hand card. Empty
+        while a modal has the board's attention or the hand/game has ended,
+        matching how `_click` is already gated at those points."""
+        m = self.model
+        if self.picker.open or self.rules.open or m.hand_over or m.game_over:
+            return []
+        targets = [("stock", *self._stock_rect()), ("discard", *self._discard_rect())]
+        if m.turn == HUMAN and m.phase == "discard" and self._knock_available():
+            targets.append(("knock", *self._knock_rect()))
+        hy = self._hand_y()
+        for i, (card, x, _) in enumerate(self._human_layout()):
+            targets.append((("hand", i), x, hy, CARD_W, CARD_H))
+        return targets
+
     # ------------------------------------------------------------ layout
     def _ox(self):
         return self._W / 2
@@ -434,6 +452,7 @@ class GinRummyRun(GameRun):
         o.text("Click: draw / discard   K: knock   N: deal   Tab: skins   H: rules",
                W / 2, H - 32, size=13, color=DIM, center=True)
 
+        self.pad_cursor.draw(o)
         if m.hand_over or m.game_over:
             self._draw_result(o, W, H)
         if self.picker.open:

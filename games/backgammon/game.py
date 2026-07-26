@@ -10,6 +10,12 @@ OFF tray once you're bearing off) to play one die; repeat until the roll is
 used up — the turn then commits automatically. U undoes the turn's picks so
 far (back to the roll) if you change your mind mid-turn. The house plays
 itself with a short beat, same cadence as Gin Rummy.
+
+Gamepad (CAB-23, not yet wired): adopt `table.PadCursor` like Solitaire/Rummy
+— add a `pad_targets()` method (the roll button + one target per highlighted
+source/destination point), `self.pad_cursor = table.PadCursor(self)` in
+`__init__`, `pad_cursor.draw(o)` in `draw_hud`; `confirm()` dispatches this
+module's own `_click` at the target center, so no other change is needed.
 """
 import random
 

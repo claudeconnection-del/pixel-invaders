@@ -183,6 +183,7 @@ class App:
             stick = pygame.joystick.Joystick(i)
             self.joysticks[stick.get_instance_id()] = stick
         self.pad_nav_cooldown = 0.0
+        self._mouse_moved = False   # this frame's mouse motion (CAB-23 pad cursor)
 
         self.state = MENU
         self.menu_index = 0
@@ -1567,11 +1568,16 @@ class App:
             self.stop_ambient()
             return
         in_game = self.state in (PLAYING, PAUSED)
+        cursor = getattr(self.run, "pad_cursor", None)
         if button == 0:      # A: confirm (fire is polled separately in-game)
-            if not in_game:
+            if self.state == PLAYING and cursor is not None:
+                cursor.confirm()
+            elif not in_game:
                 self.handle_keydown(pygame.K_RETURN)
         elif button == 1:    # B: back / resume
-            if self.state != PLAYING:
+            if self.state == PLAYING and cursor is not None:
+                cursor.clear()
+            elif self.state != PLAYING:
                 self.handle_keydown(pygame.K_ESCAPE)
         elif button == 6:    # back/select: quit to menu while paused
             if self.state == PAUSED:
@@ -1601,6 +1607,33 @@ class App:
             self.handle_keydown(key)
             self.pad_nav_cooldown = 0.22
 
+    def poll_pad_cursor(self, dt):
+        """D-pad/stick steps a tabletop game's pad cursor (CAB-23) — only
+        during PLAYING, and only for a run that opts in via a `pad_cursor`
+        attribute (Solitaire/Rummy today). Shares `pad_nav_cooldown` with
+        `poll_pad_navigation` safely: that method already no-ops during
+        PLAYING, so the two never fight over the same timer."""
+        run = self.run
+        cursor = getattr(run, "pad_cursor", None)
+        if self.state != PLAYING or cursor is None:
+            return
+        self.pad_nav_cooldown = max(0.0, self.pad_nav_cooldown - dt)
+        dx, dy, _, _, _ = self.pad_state()
+        if self.pad_nav_cooldown > 0:
+            return
+        direction = None
+        if dy < -0.5:
+            direction = "up"
+        elif dy > 0.5:
+            direction = "down"
+        elif dx < -0.5:
+            direction = "left"
+        elif dx > 0.5:
+            direction = "right"
+        if direction is not None:
+            cursor.step(direction)
+            self.pad_nav_cooldown = 0.22
+
     # ------------------------------------------------------------ gameplay
     def mouse_logical(self):
         """Window mouse position in logical UI coordinates (window pixels
@@ -1615,8 +1648,11 @@ class App:
         aim_x, aim_y = self.mouse_logical()
         mouse_fire = pygame.mouse.get_pressed()[0]
         # relative mouse motion, consumed every frame; only applied by
-        # mouse-look games (grab is on for those)
-        rel_dx = pygame.mouse.get_rel()[0]
+        # mouse-look games (grab is on for those). Also the one place any
+        # mouse motion is visible at all, so a tabletop pad cursor (CAB-23)
+        # piggybacks here to know when to hide itself for the mouse.
+        rel_dx, rel_dy = pygame.mouse.get_rel()
+        self._mouse_moved = bool(rel_dx or rel_dy)
         sens = self.profile["settings"].get("mouse_sens", 1.0)
         look_dx = rel_dx * sens if self.game.INFO.mouse_look else 0.0
 
@@ -1643,6 +1679,9 @@ class App:
     def update_playing(self, dt):
         run = self.run
         inp = self.gameplay_input()
+        cursor = getattr(run, "pad_cursor", None)
+        if cursor is not None and self._mouse_moved:
+            cursor.hide()
         if self.pilot is not None:
             if self._pilot_real_input(inp):
                 self._handback_pilot()
@@ -2490,6 +2529,7 @@ class App:
                     self.renderer.resize(event.w, event.h)
 
             self.poll_pad_navigation(dt)
+            self.poll_pad_cursor(dt)
             self.poll_network()
             self._poll_exports()
             self.outbox_timer -= dt

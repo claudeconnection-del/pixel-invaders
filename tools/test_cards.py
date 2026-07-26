@@ -341,6 +341,76 @@ def test_tweens():
           "concurrency degrade)")
 
 
+def test_pad_cursor():
+    from games.cards.table import PadCursor
+
+    # a 3x3 grid of targets, ids "r{row}c{col}", 100px apart
+    grid = {}
+    for r in range(3):
+        for c in range(3):
+            grid[f"r{r}c{c}"] = (c * 100, r * 100, 80, 80)
+
+    class _Host:
+        def __init__(self):
+            self.sel = "something"
+            self.clicked = None
+        def pad_targets(self):
+            return [(tid, x, y, w, h) for tid, (x, y, w, h) in grid.items()]
+        def _click(self, x, y):
+            self.clicked = (x, y)
+
+    host = _Host()
+    pc = PadCursor(host)
+    assert not pc.visible
+    # first step with nothing selected yet lands on the first target
+    pc.step("right")
+    assert pc.target_id == "r0c0" and pc.visible
+
+    # stepping right/left/up/down moves to the nearest target in that
+    # halfplane from the center column/row
+    pc.target_id = "r1c1"
+    pc.step("right")
+    assert pc.target_id == "r1c2"
+    pc.step("left")
+    assert pc.target_id == "r1c1"
+    pc.step("up")
+    assert pc.target_id == "r0c1"
+    pc.step("down")
+    assert pc.target_id == "r1c1"
+
+    # no-wrap: at the rightmost column, stepping right further stays put
+    pc.target_id = "r1c2"
+    pc.step("right")
+    assert pc.target_id == "r1c2", "must not wrap to the far side"
+    pc.target_id = "r0c0"
+    pc.step("up")
+    assert pc.target_id == "r0c0", "must not wrap to the far side"
+
+    # confirm dispatches host._click at the target's center
+    pc.target_id = "r0c1"
+    pc.confirm()
+    assert host.clicked == (140.0, 40.0)   # (100+80/2, 0+80/2)
+
+    # clear() clears the host's own selection state
+    pc.clear()
+    assert host.sel is None
+
+    # mouse motion hides the cursor without touching which target it's on
+    pc.visible = True
+    pc.hide()
+    assert not pc.visible and pc.target_id == "r0c1"
+
+    # an empty target list is a no-op, never raises
+    empty_host = _Host()
+    empty_host.pad_targets = lambda: []
+    pc2 = PadCursor(empty_host)
+    pc2.step("right")
+    pc2.confirm()
+    assert pc2.target_id is None and empty_host.clicked is None
+    print("pad cursor OK (halfplane stepping, no-wrap, confirm/clear, "
+          "hide, empty-target no-op)")
+
+
 def test_solitaire_tween_wiring():
     import games.solitaire.game as solgame
 
@@ -385,6 +455,36 @@ def test_solitaire_tween_wiring():
           "low-motion no-op)")
 
 
+def test_solitaire_pad_cursor_wiring():
+    import games.solitaire.game as solgame
+
+    run = solgame.create_run("draw1", random.Random(3))
+    run.attach_profile({"achievements": {}, "lifetime": {}, "unlocked_skins": []},
+                       {}, lambda: None)
+
+    targets = run.pad_targets()
+    ids = [t[0] for t in targets]
+    assert ids[0] == "stock" and ids[1] == "waste"
+    assert ("foundation", "S") in ids
+    assert ("tableau", 0) in ids and ("tableau", 6) in ids
+    assert len(targets) == 2 + 4 + 7
+
+    # confirm on the stock target draws a card, exactly like a mouse click
+    run.pad_cursor.target_id = "stock"
+    before_waste = len(run.model.waste)
+    run.pad_cursor.confirm()
+    assert len(run.model.waste) == before_waste + 1
+
+    # a modal (the skin picker) takes the board's attention: no targets,
+    # so the cursor can't act until it closes
+    run.picker.open = True
+    assert run.pad_targets() == []
+    run.picker.open = False
+    assert run.pad_targets() != []
+    print("solitaire pad cursor wiring OK (targets, confirm dispatches "
+          "_click, modal gating)")
+
+
 def test_autocomplete_and_double_click():
     import games.solitaire.game as solgame
     run = solgame.create_run("draw1", random.Random(1))
@@ -427,7 +527,9 @@ def main():
     test_vegas_achievements()
     test_solitaire_achievements()
     test_tweens()
+    test_pad_cursor()
     test_solitaire_tween_wiring()
+    test_solitaire_pad_cursor_wiring()
     test_autocomplete_and_double_click()
     print("ALL CARD TESTS PASSED")
 

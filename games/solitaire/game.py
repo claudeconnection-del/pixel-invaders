@@ -106,6 +106,7 @@ class SolitaireRun(GameRun):
         self.four_color = False                # accessibility: 4-color suit inks
         self._felt_preset = table.make_felt_preset(self.felt)
         self.tweens = table.Tweens()           # CAB-20: deal/move flight animations
+        self.pad_cursor = table.PadCursor(self)  # CAB-23: gamepad play
         self.picker = table.SkinPicker(self)   # shared TAB deck/felt picker
         self.rules = table.RulesOverlay(self)  # shared H rules overlay
         self.rules_title = INFO.name
@@ -520,6 +521,33 @@ class SolitaireRun(GameRun):
                 self.save_cb()
             self.emit("sol_win")        # engine sees the updated counters here
 
+    # ------------------------------------------------ gamepad cursor (CAB-23)
+    def pad_targets(self):
+        """Discrete pad-navigable targets: stock, waste, the four
+        foundations, and one per tableau column (its topmost card, or the
+        empty slot) — the same geometry `_hit` resolves against, so a pad
+        confirm and a mouse click at the same spot behave identically.
+        Empty (cursor stays hidden) while a modal — picker, rules, the
+        auto-complete sweep, or the win screen — has the board's attention,
+        exactly like mouse clicks are already gated in `update()`."""
+        if self.picker.open or self.rules.open or self.autocompleting \
+                or self.won_flag:
+            return []
+        ox = self._ox()
+        wfan = CARD_W + (2 * 24 if self.draw_count == 3 else 0)
+        targets = [("stock", ox, TOP_Y, CARD_W, CARD_H),
+                  ("waste", ox + COL_STRIDE, TOP_Y, wfan, CARD_H)]
+        for idx, col in enumerate(FOUNDATION_COLS):
+            suit = SUITS[idx]
+            targets.append((("foundation", suit), ox + col * COL_STRIDE,
+                            TOP_Y, CARD_W, CARD_H))
+        for i in range(7):
+            cx = self._col_x(i)
+            ys = self._col_ys(i)
+            y = ys[-1] if ys else TABLEAU_TOP
+            targets.append((("tableau", i), cx, y, CARD_W, CARD_H))
+        return targets
+
     # ------------------------------------------------------------ hit-test
     def _ox(self):
         return max(20, (self._W - TABLE_W) / 2)
@@ -619,6 +647,7 @@ class SolitaireRun(GameRun):
 
         self._draw_auto_prompt(o, W)
         self._draw_footer(o, W, H)
+        self.pad_cursor.draw(o)
         if self.won_flag:
             self._draw_win(o, W, H)
         if self.picker.open:
